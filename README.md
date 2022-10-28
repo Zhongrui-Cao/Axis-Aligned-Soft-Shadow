@@ -29,8 +29,8 @@ but have not visualized it or used it to compute number of samples.
 
 ## Future plan
 
-In the next few weeks I plan to:\
-1. work on calculating the number of samples using d1 d2.\
-2. work on calculating the beta (filter size), and work on the image blur.\
-3. Then I will build a scene loader, which will take obj files and render test objects interactively.\
+In the next few weeks I plan to:
+1. work on calculating the number of samples using d1 d2.
+2. work on calculating the beta (filter size), and work on the image blur.
+3. Then I will build a scene loader, which will take obj files and render test objects interactively.
 4. Finally I will work on animating the light and the objects in the scene to make the demo more intersting.
