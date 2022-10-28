@@ -46,6 +46,7 @@
 #include <sutil/sutil.h>
 #include <sutil/vec_math.h>
 #include <optix_stack_size.h>
+#include <sutil/Scene.h>
 
 #include <GLFW/glfw3.h>
 
@@ -72,7 +73,7 @@ sutil::Trackball trackball;
 // Mouse state
 int32_t mouse_button = -1;
 
-int32_t samples_per_launch = 4;
+int32_t samples_per_launch = 1;
 
 //------------------------------------------------------------------------------
 //
@@ -982,6 +983,8 @@ int main( int argc, char* argv[] )
     state.params.height                            = 768;
     sutil::CUDAOutputBufferType output_buffer_type = sutil::CUDAOutputBufferType::GL_INTEROP;
 
+
+    std::string infile = sutil::sampleDataFilePath("WaterBottle/WaterBottle.gltf");
     //
     // Parse command line options
     //
@@ -1027,6 +1030,11 @@ int main( int argc, char* argv[] )
 
     try
     {
+
+        sutil::Scene scene;
+        sutil::loadScene(infile.c_str(), scene);
+        scene.finalize();
+
         initCameraState();
 
         //
