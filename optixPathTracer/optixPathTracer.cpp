@@ -67,8 +67,8 @@ const char* const SAMPLE_NAME = "optixPathTracer";
 //------------------------------------------------------------------------------
 
 Context        context = 0;
-uint32_t       width  = 800;
-uint32_t       height = 800;
+uint32_t       width  = 1000;
+uint32_t       height = 1000;
 bool           use_pbo = true;
 
 int            frame_number = 1;
@@ -82,6 +82,9 @@ float3         camera_up;
 float3         camera_lookat;
 float3         camera_eye;
 Matrix4x4      camera_rotate;
+float          camera_pitch;
+float          camera_yaw;
+float3         camera_pos;
 bool           camera_changed = true;
 sutil::Arcball arcball;
 
@@ -352,6 +355,9 @@ void setupCamera()
     camera_eye    = make_float3( 278.0f, 273.0f, -900.0f );
     camera_lookat = make_float3( 278.0f, 273.0f,    0.0f );
     camera_up     = make_float3(   0.0f,   1.0f,    0.0f );
+    camera_pos = make_float3(278.0f, 273.0f, 900.0f);
+    camera_pitch = 0.0f;
+    camera_yaw = 1.55f;
 
     camera_rotate  = Matrix4x4::identity();
 }
@@ -361,33 +367,17 @@ void updateCamera()
 {
     const float fov  = 35.0f;
     const float aspect_ratio = static_cast<float>(width) / static_cast<float>(height);
+
+    float3 fwd = make_float3(cos(camera_pitch) * cos(camera_yaw), sin(camera_pitch), cos(camera_pitch) * sin(camera_yaw));
+    float3 camera_lookat = camera_pos + fwd;
     
     float3 camera_u, camera_v, camera_w;
     sutil::calculateCameraVariables(
-            camera_eye, camera_lookat, camera_up, fov, aspect_ratio,
+        camera_pos, camera_lookat, camera_up, fov, aspect_ratio,
             camera_u, camera_v, camera_w, /*fov_is_vertical*/ true );
 
-    const Matrix4x4 frame = Matrix4x4::fromBasis( 
-            normalize( camera_u ),
-            normalize( camera_v ),
-            normalize( -camera_w ),
-            camera_lookat);
-    const Matrix4x4 frame_inv = frame.inverse();
-    // Apply camera rotation twice to match old SDK behavior
-    const Matrix4x4 trans     = frame*camera_rotate*camera_rotate*frame_inv; 
-
-    camera_eye    = make_float3( trans*make_float4( camera_eye,    1.0f ) );
-    camera_lookat = make_float3( trans*make_float4( camera_lookat, 1.0f ) );
-    camera_up     = make_float3( trans*make_float4( camera_up,     0.0f ) );
-
-    sutil::calculateCameraVariables(
-            camera_eye, camera_lookat, camera_up, fov, aspect_ratio,
-            camera_u, camera_v, camera_w, true );
-
-    camera_rotate = Matrix4x4::identity();
-
     if( camera_changed ) // reset accumulation
-        frame_number = 1;
+        //frame_number = 1; //real time no need
     camera_changed = false;
 
     context[ "frame_number" ]->setUint( frame_number++ );
@@ -512,16 +502,12 @@ void glutMouseMotion( int x, int y)
     }
     else if( mouse_button == GLUT_LEFT_BUTTON )
     {
-        const float2 from = { static_cast<float>(mouse_prev_pos.x),
-                              static_cast<float>(mouse_prev_pos.y) };
-        const float2 to   = { static_cast<float>(x),
-                              static_cast<float>(y) };
-
-        const float2 a = { from.x / width, from.y / height };
-        const float2 b = { to.x   / width, to.y   / height };
-
-        camera_rotate = arcball.rotate( b, a );
-        camera_changed = true;
+        const float dx = static_cast<float>(x - mouse_prev_pos.x) /
+            static_cast<float>(width);
+        const float dy = static_cast<float>(y - mouse_prev_pos.y) /
+            static_cast<float>(height);
+        camera_yaw += dx;
+        camera_pitch -= dy;
     }
 
     mouse_prev_pos = make_int2( x, y );
