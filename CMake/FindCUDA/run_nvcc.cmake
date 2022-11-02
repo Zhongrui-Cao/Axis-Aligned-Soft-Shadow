@@ -1,6 +1,6 @@
 #  James Bigler, NVIDIA Corp (nvidia.com - jbigler)
 #
-#  Copyright (c) 2008 - 2021 NVIDIA Corporation.  All rights reserved.
+#  Copyright (c) 2008 - 2009 NVIDIA Corporation.  All rights reserved.
 #
 #  This code is licensed under the MIT License.  See the FindCUDA.cmake script
 #  for the text of the license.
@@ -55,9 +55,6 @@
 #                            date, simply touch the output file instead of
 #                            generating it.
 
-# Support IN_LIST
-cmake_policy(SET CMP0057 NEW)
-
 if(NOT generated_file)
   message(FATAL_ERROR "You must specify generated_file on the command line")
 endif()
@@ -105,11 +102,7 @@ string(TOUPPER "${build_configuration}" build_configuration)
 #message("CUDA_NVCC_HOST_COMPILER_FLAGS = ${CUDA_NVCC_HOST_COMPILER_FLAGS}")
 foreach(flag ${CMAKE_HOST_FLAGS} ${CMAKE_HOST_FLAGS_${build_configuration}})
   # Extra quotes are added around each flag to help nvcc parse out flags with spaces.
-  if ("${nvcc_host_compiler_flags}" STREQUAL "")
-    set(nvcc_host_compiler_flags "\"${flag}\"")
-  else()
-    set(nvcc_host_compiler_flags "${nvcc_host_compiler_flags},\"${flag}\"")
-  endif()
+  set(nvcc_host_compiler_flags "${nvcc_host_compiler_flags},\"${flag}\"")
 endforeach()
 if (nvcc_host_compiler_flags)
   set(nvcc_host_compiler_flags "-Xcompiler" ${nvcc_host_compiler_flags})
@@ -119,11 +112,7 @@ endif()
 set(depends_nvcc_host_compiler_flags "")
 foreach(flag ${CMAKE_HOST_FLAGS} )
   # Extra quotes are added around each flag to help nvcc parse out flags with spaces.
-  if ("${depends_nvcc_host_compiler_flags}" STREQUAL "")
-    set(depends_nvcc_host_compiler_flags "\"${flag}\"")
-  else()
-    set(depends_nvcc_host_compiler_flags "${depends_nvcc_host_compiler_flags},\"${flag}\"")
-  endif()
+  set(depends_nvcc_host_compiler_flags "${depends_nvcc_host_compiler_flags},\"${flag}\"")
 endforeach()
 if (depends_nvcc_host_compiler_flags)
   set(depends_nvcc_host_compiler_flags "-Xcompiler" ${depends_nvcc_host_compiler_flags})
@@ -154,15 +143,10 @@ endif()
 #
 # Make this a macro instead of a function, so that things like RESULT_VARIABLE
 # and other return variables are present after executing the process.
-function(cuda_execute_process status command)
+macro(cuda_execute_process status command)
   set(_command ${command})
   if(NOT "x${_command}" STREQUAL "xCOMMAND")
     message(FATAL_ERROR "Malformed call to cuda_execute_process.  Missing COMMAND as second argument. (command = ${command})")
-  endif()
-  # nvcc warns when specifying -G and --lineinfo, which is annoying.
-  if("-G" IN_LIST ARGN)
-    list(REMOVE_ITEM ARGN "-lineinfo")
-    list(REMOVE_ITEM ARGN "--lineinfo")
   endif()
   if(verbose)
     execute_process(COMMAND "${CMAKE_COMMAND}" -E echo -- ${status})
@@ -185,7 +169,7 @@ function(cuda_execute_process status command)
   endif()
   # Run the command
   execute_process(COMMAND ${ARGN} RESULT_VARIABLE CUDA_result )
-endfunction()
+endmacro()
 
 # For CUDA 2.3 and below, -G -M doesn't work, so remove the -G flag
 # for dependency generation and hope for the best.

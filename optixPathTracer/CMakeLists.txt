@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
+# Copyright (c) 2018, NVIDIA CORPORATION. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -26,13 +26,22 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
-OPTIX_add_sample_executable( optixPathTracer target_name
-  optixPathTracer.cu
-  optixPathTracer.cpp
-  optixPathTracer.h
-  OPTIONS -rdc true
-  )
+# See top level CMakeLists.txt file for documentation of OPTIX_add_sample_executable.
+if(GLUT_FOUND AND OPENGL_FOUND)
 
-target_link_libraries( ${target_name}
-  ${CUDA_LIBRARIES}
-  )
+    include_directories(${GLUT_INCLUDE_DIR})
+    add_definitions(-DGLUT_FOUND -DGLUT_NO_LIB_PRAGMA)
+
+    OPTIX_add_sample_executable( optixPathTracer 
+        optixPathTracer.cpp
+        optixPathTracer.cu
+        optixPathTracer.h
+
+        # These files are common among multiple samples
+        parallelogram.cu
+        random.h
+        )
+else()
+    # GLUT or OpenGL not found
+    message("Disabling optixPathTracer, which requires GLUT and OpenGL.")
+endif()

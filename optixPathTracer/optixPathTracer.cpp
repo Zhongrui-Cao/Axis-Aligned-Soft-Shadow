@@ -1,971 +1,548 @@
+/* 
+ * Copyright (c) 2018, NVIDIA CORPORATION. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *  * Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ *  * Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *  * Neither the name of NVIDIA CORPORATION nor the names of its
+ *    contributors may be used to endorse or promote products derived
+ *    from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY
+ * EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
+ * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+//-----------------------------------------------------------------------------
 //
-// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
+// optixPathTracer: simple interactive path tracer
 //
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions
-// are met:
-//  * Redistributions of source code must retain the above copyright
-//    notice, this list of conditions and the following disclaimer.
-//  * Redistributions in binary form must reproduce the above copyright
-//    notice, this list of conditions and the following disclaimer in the
-//    documentation and/or other materials provided with the distribution.
-//  * Neither the name of NVIDIA CORPORATION nor the names of its
-//    contributors may be used to endorse or promote products derived
-//    from this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY
-// EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
-// PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
-// CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
-// EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-// PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
-// PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
-// OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//
+//-----------------------------------------------------------------------------
 
-#include <glad/glad.h>  // Needs to be included before gl_interop
+#ifdef __APPLE__
+#  include <GLUT/glut.h>
+#else
+#  include <GL/glew.h>
+#  if defined( _WIN32 )
+#    include <GL/wglew.h>
+#    include <GL/freeglut.h>
+#  else
+#    include <GL/glut.h>
+#  endif
+#endif
 
-#include <cuda_gl_interop.h>
-#include <cuda_runtime.h>
-
-#include <optix.h>
-#include <optix_function_table_definition.h>
-#include <optix_stubs.h>
-
-#include <sampleConfig.h>
-
-#include <sutil/CUDAOutputBuffer.h>
-#include <sutil/Camera.h>
-#include <sutil/Exception.h>
-#include <sutil/GLDisplay.h>
-#include <sutil/Matrix.h>
-#include <sutil/Trackball.h>
-#include <sutil/sutil.h>
-#include <sutil/vec_math.h>
-#include <optix_stack_size.h>
-
-#include <GLFW/glfw3.h>
+#include <optixu/optixpp_namespace.h>
+#include <optixu/optixu_math_stream_namespace.h>
 
 #include "optixPathTracer.h"
+#include <sutil.h>
+#include <Arcball.h>
 
-#include <array>
+#include <algorithm>
 #include <cstring>
-#include <fstream>
-#include <iomanip>
 #include <iostream>
-#include <sstream>
-#include <string>
+#include <stdint.h>
 
+using namespace optix;
 
+const char* const SAMPLE_NAME = "optixPathTracer";
 
-bool resize_dirty = false;
-bool minimized    = false;
+//------------------------------------------------------------------------------
+//
+// Globals
+//
+//------------------------------------------------------------------------------
+
+Context        context = 0;
+uint32_t       width  = 800;
+uint32_t       height = 800;
+bool           use_pbo = true;
+
+int            frame_number = 1;
+int            sqrt_num_samples = 1;
+int            rr_begin_depth = 1;
+Program        pgram_intersection = 0;
+Program        pgram_bounding_box = 0;
 
 // Camera state
-bool             camera_changed = true;
-sutil::Camera    camera;
-sutil::Trackball trackball;
+float3         camera_up;
+float3         camera_lookat;
+float3         camera_eye;
+Matrix4x4      camera_rotate;
+bool           camera_changed = true;
+sutil::Arcball arcball;
 
 // Mouse state
-int32_t mouse_button = -1;
-
-int32_t samples_per_launch = 4;
-
-//------------------------------------------------------------------------------
-//
-// Local types
-// TODO: some of these should move to sutil or optix util header
-//
-//------------------------------------------------------------------------------
-
-template <typename T>
-struct Record
-{
-    __align__( OPTIX_SBT_RECORD_ALIGNMENT ) char header[OPTIX_SBT_RECORD_HEADER_SIZE];
-    T data;
-};
-
-typedef Record<RayGenData>   RayGenRecord;
-typedef Record<MissData>     MissRecord;
-typedef Record<HitGroupData> HitGroupRecord;
-
-
-struct Vertex
-{
-    float x, y, z, pad;
-};
-
-
-struct IndexedTriangle
-{
-    uint32_t v1, v2, v3, pad;
-};
-
-
-struct Instance
-{
-    float transform[12];
-};
-
-
-struct PathTracerState
-{
-    OptixDeviceContext context = 0;
-
-    OptixTraversableHandle         gas_handle               = 0;  // Traversable handle for triangle AS
-    CUdeviceptr                    d_gas_output_buffer      = 0;  // Triangle AS memory
-    CUdeviceptr                    d_vertices               = 0;
-
-    OptixModule                    ptx_module               = 0;
-    OptixPipelineCompileOptions    pipeline_compile_options = {};
-    OptixPipeline                  pipeline                 = 0;
-
-    OptixProgramGroup              raygen_prog_group        = 0;
-    OptixProgramGroup              radiance_miss_group      = 0;
-    OptixProgramGroup              occlusion_miss_group     = 0;
-    OptixProgramGroup              radiance_hit_group       = 0;
-    OptixProgramGroup              occlusion_hit_group      = 0;
-
-    CUstream                       stream                   = 0;
-    Params                         params;
-    Params*                        d_params;
-
-    OptixShaderBindingTable        sbt                      = {};
-};
+int2           mouse_prev_pos;
+int            mouse_button;
 
 
 //------------------------------------------------------------------------------
 //
-// Scene data
+// Forward decls 
 //
 //------------------------------------------------------------------------------
 
-const int32_t TRIANGLE_COUNT = 32;
-const int32_t MAT_COUNT      = 4;
+Buffer getOutputBuffer();
+void destroyContext();
+void registerExitHandler();
+void createContext();
+void loadGeometry();
+void setupCamera();
+void updateCamera();
+void glutInitialize( int* argc, char** argv );
+void glutRun();
 
-const static std::array<Vertex, TRIANGLE_COUNT* 3> g_vertices =
-{  {
-    // Floor  -- white lambert
-    {    0.0f,    0.0f,    0.0f, 0.0f },
-    {    0.0f,    0.0f,  559.2f, 0.0f },
-    {  556.0f,    0.0f,  559.2f, 0.0f },
-    {    0.0f,    0.0f,    0.0f, 0.0f },
-    {  556.0f,    0.0f,  559.2f, 0.0f },
-    {  556.0f,    0.0f,    0.0f, 0.0f },
-
-    // Ceiling -- white lambert
-    {    0.0f,  548.8f,    0.0f, 0.0f },
-    {  556.0f,  548.8f,    0.0f, 0.0f },
-    {  556.0f,  548.8f,  559.2f, 0.0f },
-
-    {    0.0f,  548.8f,    0.0f, 0.0f },
-    {  556.0f,  548.8f,  559.2f, 0.0f },
-    {    0.0f,  548.8f,  559.2f, 0.0f },
-
-    // Back wall -- white lambert
-    {    0.0f,    0.0f,  559.2f, 0.0f },
-    {    0.0f,  548.8f,  559.2f, 0.0f },
-    {  556.0f,  548.8f,  559.2f, 0.0f },
-
-    {    0.0f,    0.0f,  559.2f, 0.0f },
-    {  556.0f,  548.8f,  559.2f, 0.0f },
-    {  556.0f,    0.0f,  559.2f, 0.0f },
-
-    // Right wall -- green lambert
-    {    0.0f,    0.0f,    0.0f, 0.0f },
-    {    0.0f,  548.8f,    0.0f, 0.0f },
-    {    0.0f,  548.8f,  559.2f, 0.0f },
-
-    {    0.0f,    0.0f,    0.0f, 0.0f },
-    {    0.0f,  548.8f,  559.2f, 0.0f },
-    {    0.0f,    0.0f,  559.2f, 0.0f },
-
-    // Left wall -- red lambert
-    {  556.0f,    0.0f,    0.0f, 0.0f },
-    {  556.0f,    0.0f,  559.2f, 0.0f },
-    {  556.0f,  548.8f,  559.2f, 0.0f },
-
-    {  556.0f,    0.0f,    0.0f, 0.0f },
-    {  556.0f,  548.8f,  559.2f, 0.0f },
-    {  556.0f,  548.8f,    0.0f, 0.0f },
-
-    // Short block -- white lambert
-    {  130.0f,  165.0f,   65.0f, 0.0f },
-    {   82.0f,  165.0f,  225.0f, 0.0f },
-    {  242.0f,  165.0f,  274.0f, 0.0f },
-
-    {  130.0f,  165.0f,   65.0f, 0.0f },
-    {  242.0f,  165.0f,  274.0f, 0.0f },
-    {  290.0f,  165.0f,  114.0f, 0.0f },
-
-    {  290.0f,    0.0f,  114.0f, 0.0f },
-    {  290.0f,  165.0f,  114.0f, 0.0f },
-    {  240.0f,  165.0f,  272.0f, 0.0f },
-
-    {  290.0f,    0.0f,  114.0f, 0.0f },
-    {  240.0f,  165.0f,  272.0f, 0.0f },
-    {  240.0f,    0.0f,  272.0f, 0.0f },
-
-    {  130.0f,    0.0f,   65.0f, 0.0f },
-    {  130.0f,  165.0f,   65.0f, 0.0f },
-    {  290.0f,  165.0f,  114.0f, 0.0f },
-
-    {  130.0f,    0.0f,   65.0f, 0.0f },
-    {  290.0f,  165.0f,  114.0f, 0.0f },
-    {  290.0f,    0.0f,  114.0f, 0.0f },
-
-    {   82.0f,    0.0f,  225.0f, 0.0f },
-    {   82.0f,  165.0f,  225.0f, 0.0f },
-    {  130.0f,  165.0f,   65.0f, 0.0f },
-
-    {   82.0f,    0.0f,  225.0f, 0.0f },
-    {  130.0f,  165.0f,   65.0f, 0.0f },
-    {  130.0f,    0.0f,   65.0f, 0.0f },
-
-    {  240.0f,    0.0f,  272.0f, 0.0f },
-    {  240.0f,  165.0f,  272.0f, 0.0f },
-    {   82.0f,  165.0f,  225.0f, 0.0f },
-
-    {  240.0f,    0.0f,  272.0f, 0.0f },
-    {   82.0f,  165.0f,  225.0f, 0.0f },
-    {   82.0f,    0.0f,  225.0f, 0.0f },
-
-    // Tall block -- white lambert
-    {  423.0f,  330.0f,  247.0f, 0.0f },
-    {  265.0f,  330.0f,  296.0f, 0.0f },
-    {  314.0f,  330.0f,  455.0f, 0.0f },
-
-    {  423.0f,  330.0f,  247.0f, 0.0f },
-    {  314.0f,  330.0f,  455.0f, 0.0f },
-    {  472.0f,  330.0f,  406.0f, 0.0f },
-
-    {  423.0f,    0.0f,  247.0f, 0.0f },
-    {  423.0f,  330.0f,  247.0f, 0.0f },
-    {  472.0f,  330.0f,  406.0f, 0.0f },
-
-    {  423.0f,    0.0f,  247.0f, 0.0f },
-    {  472.0f,  330.0f,  406.0f, 0.0f },
-    {  472.0f,    0.0f,  406.0f, 0.0f },
-
-    {  472.0f,    0.0f,  406.0f, 0.0f },
-    {  472.0f,  330.0f,  406.0f, 0.0f },
-    {  314.0f,  330.0f,  456.0f, 0.0f },
-
-    {  472.0f,    0.0f,  406.0f, 0.0f },
-    {  314.0f,  330.0f,  456.0f, 0.0f },
-    {  314.0f,    0.0f,  456.0f, 0.0f },
-
-    {  314.0f,    0.0f,  456.0f, 0.0f },
-    {  314.0f,  330.0f,  456.0f, 0.0f },
-    {  265.0f,  330.0f,  296.0f, 0.0f },
-
-    {  314.0f,    0.0f,  456.0f, 0.0f },
-    {  265.0f,  330.0f,  296.0f, 0.0f },
-    {  265.0f,    0.0f,  296.0f, 0.0f },
-
-    {  265.0f,    0.0f,  296.0f, 0.0f },
-    {  265.0f,  330.0f,  296.0f, 0.0f },
-    {  423.0f,  330.0f,  247.0f, 0.0f },
-
-    {  265.0f,    0.0f,  296.0f, 0.0f },
-    {  423.0f,  330.0f,  247.0f, 0.0f },
-    {  423.0f,    0.0f,  247.0f, 0.0f },
-
-    // Ceiling light -- emmissive
-    {  343.0f,  548.6f,  227.0f, 0.0f },
-    {  213.0f,  548.6f,  227.0f, 0.0f },
-    {  213.0f,  548.6f,  332.0f, 0.0f },
-
-    {  343.0f,  548.6f,  227.0f, 0.0f },
-    {  213.0f,  548.6f,  332.0f, 0.0f },
-    {  343.0f,  548.6f,  332.0f, 0.0f }
-} };
-
-static std::array<uint32_t, TRIANGLE_COUNT> g_mat_indices = {{
-    0, 0,                          // Floor         -- white lambert
-    0, 0,                          // Ceiling       -- white lambert
-    0, 0,                          // Back wall     -- white lambert
-    1, 1,                          // Right wall    -- green lambert
-    2, 2,                          // Left wall     -- red lambert
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  // Short block   -- white lambert
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  // Tall block    -- white lambert
-    3, 3                           // Ceiling light -- emmissive
-}};
-
-
-
-const std::array<float3, MAT_COUNT> g_emission_colors =
-{ {
-    {  0.0f,  0.0f,  0.0f },
-    {  0.0f,  0.0f,  0.0f },
-    {  0.0f,  0.0f,  0.0f },
-    { 15.0f, 15.0f,  5.0f }
-
-} };
-
-
-const std::array<float3, MAT_COUNT> g_diffuse_colors =
-{ {
-    { 0.80f, 0.80f, 0.80f },
-    { 0.05f, 0.80f, 0.05f },
-    { 0.80f, 0.05f, 0.05f },
-    { 0.50f, 0.00f, 0.00f }
-} };
+void glutDisplay();
+void glutKeyboardPress( unsigned char k, int x, int y );
+void glutMousePress( int button, int state, int x, int y );
+void glutMouseMotion( int x, int y);
+void glutResize( int w, int h );
 
 
 //------------------------------------------------------------------------------
 //
-// GLFW callbacks
+//  Helper functions
 //
 //------------------------------------------------------------------------------
 
-static void mouseButtonCallback( GLFWwindow* window, int button, int action, int mods )
+Buffer getOutputBuffer()
 {
-    double xpos, ypos;
-    glfwGetCursorPos( window, &xpos, &ypos );
+    return context[ "output_buffer" ]->getBuffer();
+}
 
-    if( action == GLFW_PRESS )
+
+void destroyContext()
+{
+    if( context )
     {
-        mouse_button = button;
-        trackball.startTracking( static_cast<int>( xpos ), static_cast<int>( ypos ) );
-    }
-    else
-    {
-        mouse_button = -1;
+        context->destroy();
+        context = 0;
     }
 }
 
 
-static void cursorPosCallback( GLFWwindow* window, double xpos, double ypos )
+void registerExitHandler()
 {
-    Params* params = static_cast<Params*>( glfwGetWindowUserPointer( window ) );
-
-    if( mouse_button == GLFW_MOUSE_BUTTON_LEFT )
-    {
-        trackball.setViewMode( sutil::Trackball::LookAtFixed );
-        trackball.updateTracking( static_cast<int>( xpos ), static_cast<int>( ypos ), params->width, params->height );
-        camera_changed = true;
-    }
-    else if( mouse_button == GLFW_MOUSE_BUTTON_RIGHT )
-    {
-        trackball.setViewMode( sutil::Trackball::EyeFixed );
-        trackball.updateTracking( static_cast<int>( xpos ), static_cast<int>( ypos ), params->width, params->height );
-        camera_changed = true;
-    }
+    // register shutdown handler
+#ifdef _WIN32
+    glutCloseFunc( destroyContext );  // this function is freeglut-only
+#else
+    atexit( destroyContext );
+#endif
 }
 
 
-static void windowSizeCallback( GLFWwindow* window, int32_t res_x, int32_t res_y )
+void setMaterial(
+        GeometryInstance& gi,
+        Material material,
+        const std::string& color_name,
+        const float3& color)
 {
-    // Keep rendering at the current resolution when the window is minimized.
-    if( minimized )
-        return;
-
-    // Output dimensions must be at least 1 in both x and y.
-    sutil::ensureMinimumSize( res_x, res_y );
-
-    Params* params = static_cast<Params*>( glfwGetWindowUserPointer( window ) );
-    params->width  = res_x;
-    params->height = res_y;
-    camera_changed = true;
-    resize_dirty   = true;
+    gi->addMaterial(material);
+    gi[color_name]->setFloat(color);
 }
 
 
-static void windowIconifyCallback( GLFWwindow* window, int32_t iconified )
+GeometryInstance createParallelogram(
+        const float3& anchor,
+        const float3& offset1,
+        const float3& offset2)
 {
-    minimized = ( iconified > 0 );
+    Geometry parallelogram = context->createGeometry();
+    parallelogram->setPrimitiveCount( 1u );
+    parallelogram->setIntersectionProgram( pgram_intersection );
+    parallelogram->setBoundingBoxProgram( pgram_bounding_box );
+
+    float3 normal = normalize( cross( offset1, offset2 ) );
+    float d = dot( normal, anchor );
+    float4 plane = make_float4( normal, d );
+
+    float3 v1 = offset1 / dot( offset1, offset1 );
+    float3 v2 = offset2 / dot( offset2, offset2 );
+
+    parallelogram["plane"]->setFloat( plane );
+    parallelogram["anchor"]->setFloat( anchor );
+    parallelogram["v1"]->setFloat( v1 );
+    parallelogram["v2"]->setFloat( v2 );
+
+    GeometryInstance gi = context->createGeometryInstance();
+    gi->setGeometry(parallelogram);
+    return gi;
 }
 
 
-static void keyCallback( GLFWwindow* window, int32_t key, int32_t /*scancode*/, int32_t action, int32_t /*mods*/ )
+void createContext()
 {
-    if( action == GLFW_PRESS )
-    {
-        if( key == GLFW_KEY_Q || key == GLFW_KEY_ESCAPE )
-        {
-            glfwSetWindowShouldClose( window, true );
-        }
-    }
-    else if( key == GLFW_KEY_G )
-    {
-        // toggle UI draw
-    }
+    context = Context::create();
+    context->setRayTypeCount( 2 );
+    context->setEntryPointCount( 1 );
+    context->setStackSize( 1800 );
+    context->setMaxTraceDepth( 2 );
+
+    context[ "scene_epsilon"                  ]->setFloat( 1.e-3f );
+    context[ "rr_begin_depth"                 ]->setUint( rr_begin_depth );
+
+    Buffer buffer = sutil::createOutputBuffer( context, RT_FORMAT_FLOAT4, width, height, use_pbo );
+    context["output_buffer"]->set( buffer );
+
+    // Setup programs
+    const char *ptx = sutil::getPtxString( SAMPLE_NAME, "optixPathTracer.cu" );
+    context->setRayGenerationProgram( 0, context->createProgramFromPTXString( ptx, "pathtrace_camera" ) );
+    context->setExceptionProgram( 0, context->createProgramFromPTXString( ptx, "exception" ) );
+    context->setMissProgram( 0, context->createProgramFromPTXString( ptx, "miss" ) );
+
+    context[ "sqrt_num_samples" ]->setUint( sqrt_num_samples );
+    context[ "bad_color"        ]->setFloat( 1000000.0f, 0.0f, 1000000.0f ); // Super magenta to make sure it doesn't get averaged out in the progressive rendering.
+    context[ "bg_color"         ]->setFloat( make_float3(0.0f) );
 }
 
 
-static void scrollCallback( GLFWwindow* window, double xscroll, double yscroll )
+void loadGeometry()
 {
-    if( trackball.wheelEvent( (int)yscroll ) )
-        camera_changed = true;
+    // Light buffer
+    ParallelogramLight light;
+    light.corner   = make_float3( 343.0f, 548.6f, 227.0f);
+    light.v1       = make_float3( -130.0f, 0.0f, 0.0f);
+    light.v2       = make_float3( 0.0f, 0.0f, 105.0f);
+    light.normal   = normalize( cross(light.v1, light.v2) );
+    light.emission = make_float3( 15.0f, 15.0f, 5.0f );
+
+    Buffer light_buffer = context->createBuffer( RT_BUFFER_INPUT );
+    light_buffer->setFormat( RT_FORMAT_USER );
+    light_buffer->setElementSize( sizeof( ParallelogramLight ) );
+    light_buffer->setSize( 1u );
+    memcpy( light_buffer->map(), &light, sizeof( light ) );
+    light_buffer->unmap();
+    context["lights"]->setBuffer( light_buffer );
+
+
+    // Set up material
+    Material diffuse = context->createMaterial();
+    const char *ptx = sutil::getPtxString( SAMPLE_NAME, "optixPathTracer.cu" );
+    Program diffuse_ch = context->createProgramFromPTXString( ptx, "diffuse" );
+    Program diffuse_ah = context->createProgramFromPTXString( ptx, "shadow" );
+    diffuse->setClosestHitProgram( 0, diffuse_ch );
+    diffuse->setAnyHitProgram( 1, diffuse_ah );
+
+    Material diffuse_light = context->createMaterial();
+    Program diffuse_em = context->createProgramFromPTXString( ptx, "diffuseEmitter" );
+    diffuse_light->setClosestHitProgram( 0, diffuse_em );
+
+    // Set up parallelogram programs
+    ptx = sutil::getPtxString( SAMPLE_NAME, "parallelogram.cu" );
+    pgram_bounding_box = context->createProgramFromPTXString( ptx, "bounds" );
+    pgram_intersection = context->createProgramFromPTXString( ptx, "intersect" );
+
+    // create geometry instances
+    std::vector<GeometryInstance> gis;
+
+    const float3 white = make_float3( 0.8f, 0.8f, 0.8f );
+    const float3 green = make_float3( 0.05f, 0.8f, 0.05f );
+    const float3 red   = make_float3( 0.8f, 0.05f, 0.05f );
+    const float3 light_em = make_float3( 15.0f, 15.0f, 5.0f );
+
+    // Floor
+    gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 0.0f ),
+                                        make_float3( 0.0f, 0.0f, 559.2f ),
+                                        make_float3( 556.0f, 0.0f, 0.0f ) ) );
+    setMaterial(gis.back(), diffuse, "diffuse_color", white);
+
+    // Ceiling
+    gis.push_back( createParallelogram( make_float3( 0.0f, 548.8f, 0.0f ),
+                                        make_float3( 556.0f, 0.0f, 0.0f ),
+                                        make_float3( 0.0f, 0.0f, 559.2f ) ) );
+    setMaterial(gis.back(), diffuse, "diffuse_color", white);
+
+    // Back wall
+    gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 559.2f),
+                                        make_float3( 0.0f, 548.8f, 0.0f),
+                                        make_float3( 556.0f, 0.0f, 0.0f) ) );
+    setMaterial(gis.back(), diffuse, "diffuse_color", white);
+
+    // Right wall
+    gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 0.0f ),
+                                        make_float3( 0.0f, 548.8f, 0.0f ),
+                                        make_float3( 0.0f, 0.0f, 559.2f ) ) );
+    setMaterial(gis.back(), diffuse, "diffuse_color", green);
+
+    // Left wall
+    gis.push_back( createParallelogram( make_float3( 556.0f, 0.0f, 0.0f ),
+                                        make_float3( 0.0f, 0.0f, 559.2f ),
+                                        make_float3( 0.0f, 548.8f, 0.0f ) ) );
+    setMaterial(gis.back(), diffuse, "diffuse_color", red);
+
+    // Short block
+    gis.push_back( createParallelogram( make_float3( 130.0f, 165.0f, 65.0f),
+                                        make_float3( -48.0f, 0.0f, 160.0f),
+                                        make_float3( 160.0f, 0.0f, 49.0f) ) );
+    setMaterial(gis.back(), diffuse, "diffuse_color", white);
+    gis.push_back( createParallelogram( make_float3( 290.0f, 0.0f, 114.0f),
+                                        make_float3( 0.0f, 165.0f, 0.0f),
+                                        make_float3( -50.0f, 0.0f, 158.0f) ) );
+    setMaterial(gis.back(), diffuse, "diffuse_color", white);
+    gis.push_back( createParallelogram( make_float3( 130.0f, 0.0f, 65.0f),
+                                        make_float3( 0.0f, 165.0f, 0.0f),
+                                        make_float3( 160.0f, 0.0f, 49.0f) ) );
+    setMaterial(gis.back(), diffuse, "diffuse_color", white);
+    gis.push_back( createParallelogram( make_float3( 82.0f, 0.0f, 225.0f),
+                                        make_float3( 0.0f, 165.0f, 0.0f),
+                                        make_float3( 48.0f, 0.0f, -160.0f) ) );
+    setMaterial(gis.back(), diffuse, "diffuse_color", white);
+    gis.push_back( createParallelogram( make_float3( 240.0f, 0.0f, 272.0f),
+                                        make_float3( 0.0f, 165.0f, 0.0f),
+                                        make_float3( -158.0f, 0.0f, -47.0f) ) );
+    setMaterial(gis.back(), diffuse, "diffuse_color", white);
+
+    // Tall block
+    gis.push_back( createParallelogram( make_float3( 423.0f, 330.0f, 247.0f),
+                                        make_float3( -158.0f, 0.0f, 49.0f),
+                                        make_float3( 49.0f, 0.0f, 159.0f) ) );
+    setMaterial(gis.back(), diffuse, "diffuse_color", white);
+    gis.push_back( createParallelogram( make_float3( 423.0f, 0.0f, 247.0f),
+                                        make_float3( 0.0f, 330.0f, 0.0f),
+                                        make_float3( 49.0f, 0.0f, 159.0f) ) );
+    setMaterial(gis.back(), diffuse, "diffuse_color", white);
+    gis.push_back( createParallelogram( make_float3( 472.0f, 0.0f, 406.0f),
+                                        make_float3( 0.0f, 330.0f, 0.0f),
+                                        make_float3( -158.0f, 0.0f, 50.0f) ) );
+    setMaterial(gis.back(), diffuse, "diffuse_color", white);
+    gis.push_back( createParallelogram( make_float3( 314.0f, 0.0f, 456.0f),
+                                        make_float3( 0.0f, 330.0f, 0.0f),
+                                        make_float3( -49.0f, 0.0f, -160.0f) ) );
+    setMaterial(gis.back(), diffuse, "diffuse_color", white);
+    gis.push_back( createParallelogram( make_float3( 265.0f, 0.0f, 296.0f),
+                                        make_float3( 0.0f, 330.0f, 0.0f),
+                                        make_float3( 158.0f, 0.0f, -49.0f) ) );
+    setMaterial(gis.back(), diffuse, "diffuse_color", white);
+
+    // Create shadow group (no light)
+    GeometryGroup shadow_group = context->createGeometryGroup(gis.begin(), gis.end());
+    shadow_group->setAcceleration( context->createAcceleration( "Trbvh" ) );
+    context["top_shadower"]->set( shadow_group );
+
+    // Light
+    gis.push_back( createParallelogram( make_float3( 343.0f, 548.6f, 227.0f),
+                                        make_float3( -130.0f, 0.0f, 0.0f),
+                                        make_float3( 0.0f, 0.0f, 105.0f) ) );
+    setMaterial(gis.back(), diffuse_light, "emission_color", light_em);
+
+    // Create geometry group
+    GeometryGroup geometry_group = context->createGeometryGroup(gis.begin(), gis.end());
+    geometry_group->setAcceleration( context->createAcceleration( "Trbvh" ) );
+    context["top_object"]->set( geometry_group );
+}
+
+  
+void setupCamera()
+{
+    camera_eye    = make_float3( 278.0f, 273.0f, -900.0f );
+    camera_lookat = make_float3( 278.0f, 273.0f,    0.0f );
+    camera_up     = make_float3(   0.0f,   1.0f,    0.0f );
+
+    camera_rotate  = Matrix4x4::identity();
 }
 
 
-//------------------------------------------------------------------------------
-//
-// Helper functions
-// TODO: some of these should move to sutil or optix util header
-//
-//------------------------------------------------------------------------------
-
-void printUsageAndExit( const char* argv0 )
+void updateCamera()
 {
-    std::cerr << "Usage  : " << argv0 << " [options]\n";
-    std::cerr << "Options: --file | -f <filename>      File for image output\n";
-    std::cerr << "         --launch-samples | -s       Number of samples per pixel per launch (default 16)\n";
-    std::cerr << "         --no-gl-interop             Disable GL interop for display\n";
-    std::cerr << "         --dim=<width>x<height>      Set image dimensions; defaults to 768x768\n";
-    std::cerr << "         --help | -h                 Print this usage message\n";
-    exit( 0 );
-}
+    const float fov  = 35.0f;
+    const float aspect_ratio = static_cast<float>(width) / static_cast<float>(height);
+    
+    float3 camera_u, camera_v, camera_w;
+    sutil::calculateCameraVariables(
+            camera_eye, camera_lookat, camera_up, fov, aspect_ratio,
+            camera_u, camera_v, camera_w, /*fov_is_vertical*/ true );
 
+    const Matrix4x4 frame = Matrix4x4::fromBasis( 
+            normalize( camera_u ),
+            normalize( camera_v ),
+            normalize( -camera_w ),
+            camera_lookat);
+    const Matrix4x4 frame_inv = frame.inverse();
+    // Apply camera rotation twice to match old SDK behavior
+    const Matrix4x4 trans     = frame*camera_rotate*camera_rotate*frame_inv; 
 
-void initLaunchParams( PathTracerState& state )
-{
-    CUDA_CHECK( cudaMalloc(
-                reinterpret_cast<void**>( &state.params.accum_buffer ),
-                state.params.width * state.params.height * sizeof( float4 )
-                ) );
-    state.params.frame_buffer = nullptr;  // Will be set when output buffer is mapped
+    camera_eye    = make_float3( trans*make_float4( camera_eye,    1.0f ) );
+    camera_lookat = make_float3( trans*make_float4( camera_lookat, 1.0f ) );
+    camera_up     = make_float3( trans*make_float4( camera_up,     0.0f ) );
 
-    state.params.samples_per_launch = samples_per_launch;
-    state.params.subframe_index     = 0u;
+    sutil::calculateCameraVariables(
+            camera_eye, camera_lookat, camera_up, fov, aspect_ratio,
+            camera_u, camera_v, camera_w, true );
 
-    state.params.light.emission = make_float3( 15.0f, 15.0f, 5.0f );
-    state.params.light.corner   = make_float3( 343.0f, 548.5f, 227.0f );
-    state.params.light.v1       = make_float3( 0.0f, 0.0f, 105.0f );
-    state.params.light.v2       = make_float3( -130.0f, 0.0f, 0.0f );
-    state.params.light.normal   = normalize( cross( state.params.light.v1, state.params.light.v2 ) );
-    state.params.handle         = state.gas_handle;
+    camera_rotate = Matrix4x4::identity();
 
-    CUDA_CHECK( cudaStreamCreate( &state.stream ) );
-    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &state.d_params ), sizeof( Params ) ) );
-
-}
-
-
-void handleCameraUpdate( Params& params )
-{
-    if( !camera_changed )
-        return;
+    if( camera_changed ) // reset accumulation
+        frame_number = 1;
     camera_changed = false;
 
-    camera.setAspectRatio( static_cast<float>( params.width ) / static_cast<float>( params.height ) );
-    params.eye = camera.eye();
-    camera.UVWFrame( params.U, params.V, params.W );
+    context[ "frame_number" ]->setUint( frame_number++ );
+    context[ "eye"]->setFloat( camera_eye );
+    context[ "U"  ]->setFloat( camera_u );
+    context[ "V"  ]->setFloat( camera_v );
+    context[ "W"  ]->setFloat( camera_w );
+
 }
 
 
-void handleResize( sutil::CUDAOutputBuffer<uchar4>& output_buffer, Params& params )
+void glutInitialize( int* argc, char** argv )
 {
-    if( !resize_dirty )
-        return;
-    resize_dirty = false;
-
-    output_buffer.resize( params.width, params.height );
-
-    // Realloc accumulation buffer
-    CUDA_CHECK( cudaFree( reinterpret_cast<void*>( params.accum_buffer ) ) );
-    CUDA_CHECK( cudaMalloc(
-                reinterpret_cast<void**>( &params.accum_buffer ),
-                params.width * params.height * sizeof( float4 )
-                ) );
+    glutInit( argc, argv );
+    glutInitDisplayMode( GLUT_RGB | GLUT_ALPHA | GLUT_DEPTH | GLUT_DOUBLE );
+    glutInitWindowSize( width, height );
+    glutInitWindowPosition( 100, 100 );                                               
+    glutCreateWindow( SAMPLE_NAME );
+    glutHideWindow();                                                              
 }
 
 
-void updateState( sutil::CUDAOutputBuffer<uchar4>& output_buffer, Params& params )
+void glutRun()
 {
-    // Update params on device
-    if( camera_changed || resize_dirty )
-        params.subframe_index = 0;
+    // Initialize GL state                                                            
+    glMatrixMode(GL_PROJECTION);                                                   
+    glLoadIdentity();                                                              
+    glOrtho(0, 1, 0, 1, -1, 1 );                                                   
 
-    handleCameraUpdate( params );
-    handleResize( output_buffer, params );
+    glMatrixMode(GL_MODELVIEW);                                                    
+    glLoadIdentity();                                                              
+
+    glViewport(0, 0, width, height);                                 
+
+    glutShowWindow();                                                              
+    glutReshapeWindow( width, height);
+
+    // register glut callbacks
+    glutDisplayFunc( glutDisplay );
+    glutIdleFunc( glutDisplay );
+    glutReshapeFunc( glutResize );
+    glutKeyboardFunc( glutKeyboardPress );
+    glutMouseFunc( glutMousePress );
+    glutMotionFunc( glutMouseMotion );
+
+    registerExitHandler();
+
+    glutMainLoop();
 }
 
 
-void launchSubframe( sutil::CUDAOutputBuffer<uchar4>& output_buffer, PathTracerState& state )
+//------------------------------------------------------------------------------
+//
+//  GLUT callbacks
+//
+//------------------------------------------------------------------------------
+
+void glutDisplay()
 {
-    // Launch
-    uchar4* result_buffer_data = output_buffer.map();
-    state.params.frame_buffer  = result_buffer_data;
-    CUDA_CHECK( cudaMemcpyAsync(
-                reinterpret_cast<void*>( state.d_params ),
-                &state.params, sizeof( Params ),
-                cudaMemcpyHostToDevice, state.stream
-                ) );
+    updateCamera();
+    context->launch( 0, width, height );
 
-    OPTIX_CHECK( optixLaunch(
-                state.pipeline,
-                state.stream,
-                reinterpret_cast<CUdeviceptr>( state.d_params ),
-                sizeof( Params ),
-                &state.sbt,
-                state.params.width,   // launch width
-                state.params.height,  // launch height
-                1                     // launch depth
-                ) );
-    output_buffer.unmap();
-    CUDA_SYNC_CHECK();
-}
+    sutil::displayBufferGL( getOutputBuffer() );
 
-
-void displaySubframe( sutil::CUDAOutputBuffer<uchar4>& output_buffer, sutil::GLDisplay& gl_display, GLFWwindow* window )
-{
-    // Display
-    int framebuf_res_x = 0;  // The display's resolution (could be HDPI res)
-    int framebuf_res_y = 0;  //
-    glfwGetFramebufferSize( window, &framebuf_res_x, &framebuf_res_y );
-    gl_display.display(
-            output_buffer.width(),
-            output_buffer.height(),
-            framebuf_res_x,
-            framebuf_res_y,
-            output_buffer.getPBO()
-            );
-}
-
-
-static void context_log_cb( unsigned int level, const char* tag, const char* message, void* /*cbdata */ )
-{
-    std::cerr << "[" << std::setw( 2 ) << level << "][" << std::setw( 12 ) << tag << "]: " << message << "\n";
-}
-
-
-void initCameraState()
-{
-    camera.setEye( make_float3( 278.0f, 273.0f, -900.0f ) );
-    camera.setLookat( make_float3( 278.0f, 273.0f, 330.0f ) );
-    camera.setUp( make_float3( 0.0f, 1.0f, 0.0f ) );
-    camera.setFovY( 35.0f );
-    camera_changed = true;
-
-    trackball.setCamera( &camera );
-    trackball.setMoveSpeed( 10.0f );
-    trackball.setReferenceFrame(
-            make_float3( 1.0f, 0.0f, 0.0f ),
-            make_float3( 0.0f, 0.0f, 1.0f ),
-            make_float3( 0.0f, 1.0f, 0.0f )
-            );
-    trackball.setGimbalLock( true );
-}
-
-
-void createContext( PathTracerState& state )
-{
-    // Initialize CUDA
-    CUDA_CHECK( cudaFree( 0 ) );
-
-    OptixDeviceContext context;
-    CUcontext          cu_ctx = 0;  // zero means take the current context
-    OPTIX_CHECK( optixInit() );
-    OptixDeviceContextOptions options = {};
-    options.logCallbackFunction       = &context_log_cb;
-    options.logCallbackLevel          = 4;
-    OPTIX_CHECK( optixDeviceContextCreate( cu_ctx, &options, &context ) );
-
-    state.context = context;
-}
-
-
-void buildMeshAccel( PathTracerState& state )
-{
-    //
-    // copy mesh data to device
-    //
-    const size_t vertices_size_in_bytes = g_vertices.size() * sizeof( Vertex );
-    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &state.d_vertices ), vertices_size_in_bytes ) );
-    CUDA_CHECK( cudaMemcpy(
-                reinterpret_cast<void*>( state.d_vertices ),
-                g_vertices.data(), vertices_size_in_bytes,
-                cudaMemcpyHostToDevice
-                ) );
-
-    CUdeviceptr  d_mat_indices             = 0;
-    const size_t mat_indices_size_in_bytes = g_mat_indices.size() * sizeof( uint32_t );
-    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_mat_indices ), mat_indices_size_in_bytes ) );
-    CUDA_CHECK( cudaMemcpy(
-                reinterpret_cast<void*>( d_mat_indices ),
-                g_mat_indices.data(),
-                mat_indices_size_in_bytes,
-                cudaMemcpyHostToDevice
-                ) );
-
-    //
-    // Build triangle GAS
-    //
-    uint32_t triangle_input_flags[MAT_COUNT] =  // One per SBT record for this build input
     {
-        OPTIX_GEOMETRY_FLAG_DISABLE_ANYHIT,
-        OPTIX_GEOMETRY_FLAG_DISABLE_ANYHIT,
-        OPTIX_GEOMETRY_FLAG_DISABLE_ANYHIT,
-        OPTIX_GEOMETRY_FLAG_DISABLE_ANYHIT
-    };
+      static unsigned frame_count = 0;
+      sutil::displayFps( frame_count++ );
+    }
 
-    OptixBuildInput triangle_input                           = {};
-    triangle_input.type                                      = OPTIX_BUILD_INPUT_TYPE_TRIANGLES;
-    triangle_input.triangleArray.vertexFormat                = OPTIX_VERTEX_FORMAT_FLOAT3;
-    triangle_input.triangleArray.vertexStrideInBytes         = sizeof( Vertex );
-    triangle_input.triangleArray.numVertices                 = static_cast<uint32_t>( g_vertices.size() );
-    triangle_input.triangleArray.vertexBuffers               = &state.d_vertices;
-    triangle_input.triangleArray.flags                       = triangle_input_flags;
-    triangle_input.triangleArray.numSbtRecords               = MAT_COUNT;
-    triangle_input.triangleArray.sbtIndexOffsetBuffer        = d_mat_indices;
-    triangle_input.triangleArray.sbtIndexOffsetSizeInBytes   = sizeof( uint32_t );
-    triangle_input.triangleArray.sbtIndexOffsetStrideInBytes = sizeof( uint32_t );
+    glutSwapBuffers();
+}
 
-    OptixAccelBuildOptions accel_options = {};
-    accel_options.buildFlags             = OPTIX_BUILD_FLAG_ALLOW_COMPACTION;
-    accel_options.operation              = OPTIX_BUILD_OPERATION_BUILD;
 
-    OptixAccelBufferSizes gas_buffer_sizes;
-    OPTIX_CHECK( optixAccelComputeMemoryUsage(
-                state.context,
-                &accel_options,
-                &triangle_input,
-                1,  // num_build_inputs
-                &gas_buffer_sizes
-                ) );
+void glutKeyboardPress( unsigned char k, int x, int y )
+{
 
-    CUdeviceptr d_temp_buffer;
-    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_temp_buffer ), gas_buffer_sizes.tempSizeInBytes ) );
-
-    // non-compacted output
-    CUdeviceptr d_buffer_temp_output_gas_and_compacted_size;
-    size_t      compactedSizeOffset = roundUp<size_t>( gas_buffer_sizes.outputSizeInBytes, 8ull );
-    CUDA_CHECK( cudaMalloc(
-                reinterpret_cast<void**>( &d_buffer_temp_output_gas_and_compacted_size ),
-                compactedSizeOffset + 8
-                ) );
-
-    OptixAccelEmitDesc emitProperty = {};
-    emitProperty.type               = OPTIX_PROPERTY_TYPE_COMPACTED_SIZE;
-    emitProperty.result             = ( CUdeviceptr )( (char*)d_buffer_temp_output_gas_and_compacted_size + compactedSizeOffset );
-
-    OPTIX_CHECK( optixAccelBuild(
-                state.context,
-                0,                                  // CUDA stream
-                &accel_options,
-                &triangle_input,
-                1,                                  // num build inputs
-                d_temp_buffer,
-                gas_buffer_sizes.tempSizeInBytes,
-                d_buffer_temp_output_gas_and_compacted_size,
-                gas_buffer_sizes.outputSizeInBytes,
-                &state.gas_handle,
-                &emitProperty,                      // emitted property list
-                1                                   // num emitted properties
-                ) );
-
-    CUDA_CHECK( cudaFree( reinterpret_cast<void*>( d_temp_buffer ) ) );
-    CUDA_CHECK( cudaFree( reinterpret_cast<void*>( d_mat_indices ) ) );
-
-    size_t compacted_gas_size;
-    CUDA_CHECK( cudaMemcpy( &compacted_gas_size, (void*)emitProperty.result, sizeof(size_t), cudaMemcpyDeviceToHost ) );
-
-    if( compacted_gas_size < gas_buffer_sizes.outputSizeInBytes )
+    switch( k )
     {
-        CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &state.d_gas_output_buffer ), compacted_gas_size ) );
+        case( 'q' ):
+        case( 27 ): // ESC
+        {
+            destroyContext();
+            exit(0);
+        }
+        case( 's' ):
+        {
+            const std::string outputImage = std::string(SAMPLE_NAME) + ".ppm";
+            std::cerr << "Saving current frame to '" << outputImage << "'\n";
+            sutil::displayBufferPPM( outputImage.c_str(), getOutputBuffer(), false );
+            break;
+        }
+    }
+}
 
-        // use handle as input and output
-        OPTIX_CHECK( optixAccelCompact( state.context, 0, state.gas_handle, state.d_gas_output_buffer, compacted_gas_size, &state.gas_handle ) );
 
-        CUDA_CHECK( cudaFree( (void*)d_buffer_temp_output_gas_and_compacted_size ) );
+void glutMousePress( int button, int state, int x, int y )
+{
+    if( state == GLUT_DOWN )
+    {
+        mouse_button = button;
+        mouse_prev_pos = make_int2( x, y );
     }
     else
     {
-        state.d_gas_output_buffer = d_buffer_temp_output_gas_and_compacted_size;
+        // nothing
     }
 }
 
 
-void createModule( PathTracerState& state )
+void glutMouseMotion( int x, int y)
 {
-    OptixModuleCompileOptions module_compile_options = {};
-#if !defined( NDEBUG )
-    module_compile_options.optLevel   = OPTIX_COMPILE_OPTIMIZATION_LEVEL_0;
-    module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
-#endif
+    if( mouse_button == GLUT_RIGHT_BUTTON )
+    {
+        const float dx = static_cast<float>( x - mouse_prev_pos.x ) /
+                         static_cast<float>( width );
+        const float dy = static_cast<float>( y - mouse_prev_pos.y ) /
+                         static_cast<float>( height );
+        const float dmax = fabsf( dx ) > fabs( dy ) ? dx : dy;
+        const float scale = std::min<float>( dmax, 0.9f );
+        camera_eye = camera_eye + (camera_lookat - camera_eye)*scale;
+        camera_changed = true;
+    }
+    else if( mouse_button == GLUT_LEFT_BUTTON )
+    {
+        const float2 from = { static_cast<float>(mouse_prev_pos.x),
+                              static_cast<float>(mouse_prev_pos.y) };
+        const float2 to   = { static_cast<float>(x),
+                              static_cast<float>(y) };
 
-    state.pipeline_compile_options.usesMotionBlur        = false;
-    state.pipeline_compile_options.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS;
-    state.pipeline_compile_options.numPayloadValues      = 2;
-    state.pipeline_compile_options.numAttributeValues    = 2;
-#ifdef DEBUG // Enables debug exceptions during optix launches. This may incur significant performance cost and should only be done during development.
-    state.pipeline_compile_options.exceptionFlags = OPTIX_EXCEPTION_FLAG_DEBUG | OPTIX_EXCEPTION_FLAG_TRACE_DEPTH | OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW;
-#else
-    state.pipeline_compile_options.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE;
-#endif
-    state.pipeline_compile_options.pipelineLaunchParamsVariableName = "params";
+        const float2 a = { from.x / width, from.y / height };
+        const float2 b = { to.x   / width, to.y   / height };
 
-    size_t      inputSize = 0;
-    const char* input     = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixPathTracer.cu", inputSize );
+        camera_rotate = arcball.rotate( b, a );
+        camera_changed = true;
+    }
 
-    char   log[2048];
-    size_t sizeof_log = sizeof( log );
-    OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
-                state.context,
-                &module_compile_options,
-                &state.pipeline_compile_options,
-                input,
-                inputSize,
-                log,
-                &sizeof_log,
-                &state.ptx_module
-                ) );
+    mouse_prev_pos = make_int2( x, y );
 }
 
 
-void createProgramGroups( PathTracerState& state )
+void glutResize( int w, int h )
 {
-    OptixProgramGroupOptions  program_group_options = {};
+    if ( w == (int)width && h == (int)height ) return;
 
-    char   log[2048];
-    size_t sizeof_log = sizeof( log );
+    camera_changed = true;
 
-    {
-        OptixProgramGroupDesc raygen_prog_group_desc    = {};
-        raygen_prog_group_desc.kind                     = OPTIX_PROGRAM_GROUP_KIND_RAYGEN;
-        raygen_prog_group_desc.raygen.module            = state.ptx_module;
-        raygen_prog_group_desc.raygen.entryFunctionName = "__raygen__rg";
+    width  = w;
+    height = h;
+    sutil::ensureMinimumSize(width, height);
 
-        OPTIX_CHECK_LOG( optixProgramGroupCreate(
-                    state.context, &raygen_prog_group_desc,
-                    1,  // num program groups
-                    &program_group_options,
-                    log,
-                    &sizeof_log,
-                    &state.raygen_prog_group
-                    ) );
-    }
+    sutil::resizeBuffer( getOutputBuffer(), width, height );
 
-    {
-        OptixProgramGroupDesc miss_prog_group_desc  = {};
-        miss_prog_group_desc.kind                   = OPTIX_PROGRAM_GROUP_KIND_MISS;
-        miss_prog_group_desc.miss.module            = state.ptx_module;
-        miss_prog_group_desc.miss.entryFunctionName = "__miss__radiance";
-        sizeof_log                                  = sizeof( log );
-        OPTIX_CHECK_LOG( optixProgramGroupCreate(
-                    state.context, &miss_prog_group_desc,
-                    1,  // num program groups
-                    &program_group_options,
-                    log, &sizeof_log,
-                    &state.radiance_miss_group
-                    ) );
+    glViewport(0, 0, width, height);                                               
 
-        memset( &miss_prog_group_desc, 0, sizeof( OptixProgramGroupDesc ) );
-        miss_prog_group_desc.kind                   = OPTIX_PROGRAM_GROUP_KIND_MISS;
-        miss_prog_group_desc.miss.module            = nullptr;  // NULL miss program for occlusion rays
-        miss_prog_group_desc.miss.entryFunctionName = nullptr;
-        sizeof_log                                  = sizeof( log );
-        OPTIX_CHECK_LOG( optixProgramGroupCreate(
-                    state.context, &miss_prog_group_desc,
-                    1,  // num program groups
-                    &program_group_options,
-                    log,
-                    &sizeof_log,
-                    &state.occlusion_miss_group
-                    ) );
-    }
-
-    {
-        OptixProgramGroupDesc hit_prog_group_desc        = {};
-        hit_prog_group_desc.kind                         = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
-        hit_prog_group_desc.hitgroup.moduleCH            = state.ptx_module;
-        hit_prog_group_desc.hitgroup.entryFunctionNameCH = "__closesthit__radiance";
-        sizeof_log                                       = sizeof( log );
-        OPTIX_CHECK_LOG( optixProgramGroupCreate(
-                    state.context,
-                    &hit_prog_group_desc,
-                    1,  // num program groups
-                    &program_group_options,
-                    log,
-                    &sizeof_log,
-                    &state.radiance_hit_group
-                    ) );
-
-        memset( &hit_prog_group_desc, 0, sizeof( OptixProgramGroupDesc ) );
-        hit_prog_group_desc.kind                         = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
-        hit_prog_group_desc.hitgroup.moduleCH            = state.ptx_module;
-        hit_prog_group_desc.hitgroup.entryFunctionNameCH = "__closesthit__occlusion";
-        sizeof_log                                       = sizeof( log );
-        OPTIX_CHECK( optixProgramGroupCreate(
-                    state.context,
-                    &hit_prog_group_desc,
-                    1,  // num program groups
-                    &program_group_options,
-                    log,
-                    &sizeof_log,
-                    &state.occlusion_hit_group
-                    ) );
-    }
-}
-
-
-void createPipeline( PathTracerState& state )
-{
-    OptixProgramGroup program_groups[] =
-    {
-        state.raygen_prog_group,
-        state.radiance_miss_group,
-        state.occlusion_miss_group,
-        state.radiance_hit_group,
-        state.occlusion_hit_group
-    };
-
-    OptixPipelineLinkOptions pipeline_link_options = {};
-    pipeline_link_options.maxTraceDepth            = 2;
-    pipeline_link_options.debugLevel               = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
-
-    char   log[2048];
-    size_t sizeof_log = sizeof( log );
-    OPTIX_CHECK_LOG( optixPipelineCreate(
-                state.context,
-                &state.pipeline_compile_options,
-                &pipeline_link_options,
-                program_groups,
-                sizeof( program_groups ) / sizeof( program_groups[0] ),
-                log,
-                &sizeof_log,
-                &state.pipeline
-                ) );
-
-    // We need to specify the max traversal depth.  Calculate the stack sizes, so we can specify all
-    // parameters to optixPipelineSetStackSize.
-    OptixStackSizes stack_sizes = {};
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.raygen_prog_group,    &stack_sizes ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.radiance_miss_group,  &stack_sizes ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.occlusion_miss_group, &stack_sizes ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.radiance_hit_group,   &stack_sizes ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.occlusion_hit_group,  &stack_sizes ) );
-
-    uint32_t max_trace_depth = 2;
-    uint32_t max_cc_depth = 0;
-    uint32_t max_dc_depth = 0;
-    uint32_t direct_callable_stack_size_from_traversal;
-    uint32_t direct_callable_stack_size_from_state;
-    uint32_t continuation_stack_size;
-    OPTIX_CHECK( optixUtilComputeStackSizes(
-                &stack_sizes,
-                max_trace_depth,
-                max_cc_depth,
-                max_dc_depth,
-                &direct_callable_stack_size_from_traversal,
-                &direct_callable_stack_size_from_state,
-                &continuation_stack_size
-                ) );
-
-    const uint32_t max_traversal_depth = 1;
-    OPTIX_CHECK( optixPipelineSetStackSize(
-                state.pipeline,
-                direct_callable_stack_size_from_traversal,
-                direct_callable_stack_size_from_state,
-                continuation_stack_size,
-                max_traversal_depth
-                ) );
-}
-
-
-void createSBT( PathTracerState& state )
-{
-    CUdeviceptr  d_raygen_record;
-    const size_t raygen_record_size = sizeof( RayGenRecord );
-    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_raygen_record ), raygen_record_size ) );
-
-    RayGenRecord rg_sbt = {};
-    OPTIX_CHECK( optixSbtRecordPackHeader( state.raygen_prog_group, &rg_sbt ) );
-
-    CUDA_CHECK( cudaMemcpy(
-                reinterpret_cast<void*>( d_raygen_record ),
-                &rg_sbt,
-                raygen_record_size,
-                cudaMemcpyHostToDevice
-                ) );
-
-
-    CUdeviceptr  d_miss_records;
-    const size_t miss_record_size = sizeof( MissRecord );
-    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_miss_records ), miss_record_size * RAY_TYPE_COUNT ) );
-
-    MissRecord ms_sbt[2];
-    OPTIX_CHECK( optixSbtRecordPackHeader( state.radiance_miss_group,  &ms_sbt[0] ) );
-    ms_sbt[0].data.bg_color = make_float4( 0.0f );
-    OPTIX_CHECK( optixSbtRecordPackHeader( state.occlusion_miss_group, &ms_sbt[1] ) );
-    ms_sbt[1].data.bg_color = make_float4( 0.0f );
-
-    CUDA_CHECK( cudaMemcpy(
-                reinterpret_cast<void*>( d_miss_records ),
-                ms_sbt,
-                miss_record_size*RAY_TYPE_COUNT,
-                cudaMemcpyHostToDevice
-                ) );
-
-    CUdeviceptr  d_hitgroup_records;
-    const size_t hitgroup_record_size = sizeof( HitGroupRecord );
-    CUDA_CHECK( cudaMalloc(
-                reinterpret_cast<void**>( &d_hitgroup_records ),
-                hitgroup_record_size * RAY_TYPE_COUNT * MAT_COUNT
-                ) );
-
-    HitGroupRecord hitgroup_records[RAY_TYPE_COUNT * MAT_COUNT];
-    for( int i = 0; i < MAT_COUNT; ++i )
-    {
-        {
-            const int sbt_idx = i * RAY_TYPE_COUNT + 0;  // SBT for radiance ray-type for ith material
-
-            OPTIX_CHECK( optixSbtRecordPackHeader( state.radiance_hit_group, &hitgroup_records[sbt_idx] ) );
-            hitgroup_records[sbt_idx].data.emission_color = g_emission_colors[i];
-            hitgroup_records[sbt_idx].data.diffuse_color  = g_diffuse_colors[i];
-            hitgroup_records[sbt_idx].data.vertices       = reinterpret_cast<float4*>( state.d_vertices );
-        }
-
-        {
-            const int sbt_idx = i * RAY_TYPE_COUNT + 1;  // SBT for occlusion ray-type for ith material
-            memset( &hitgroup_records[sbt_idx], 0, hitgroup_record_size );
-
-            OPTIX_CHECK( optixSbtRecordPackHeader( state.occlusion_hit_group, &hitgroup_records[sbt_idx] ) );
-        }
-    }
-
-    CUDA_CHECK( cudaMemcpy(
-                reinterpret_cast<void*>( d_hitgroup_records ),
-                hitgroup_records,
-                hitgroup_record_size*RAY_TYPE_COUNT*MAT_COUNT,
-                cudaMemcpyHostToDevice
-                ) );
-
-    state.sbt.raygenRecord                = d_raygen_record;
-    state.sbt.missRecordBase              = d_miss_records;
-    state.sbt.missRecordStrideInBytes     = static_cast<uint32_t>( miss_record_size );
-    state.sbt.missRecordCount             = RAY_TYPE_COUNT;
-    state.sbt.hitgroupRecordBase          = d_hitgroup_records;
-    state.sbt.hitgroupRecordStrideInBytes = static_cast<uint32_t>( hitgroup_record_size );
-    state.sbt.hitgroupRecordCount         = RAY_TYPE_COUNT * MAT_COUNT;
-}
-
-
-void cleanupState( PathTracerState& state )
-{
-    OPTIX_CHECK( optixPipelineDestroy( state.pipeline ) );
-    OPTIX_CHECK( optixProgramGroupDestroy( state.raygen_prog_group ) );
-    OPTIX_CHECK( optixProgramGroupDestroy( state.radiance_miss_group ) );
-    OPTIX_CHECK( optixProgramGroupDestroy( state.radiance_hit_group ) );
-    OPTIX_CHECK( optixProgramGroupDestroy( state.occlusion_hit_group ) );
-    OPTIX_CHECK( optixProgramGroupDestroy( state.occlusion_miss_group ) );
-    OPTIX_CHECK( optixModuleDestroy( state.ptx_module ) );
-    OPTIX_CHECK( optixDeviceContextDestroy( state.context ) );
-
-
-    CUDA_CHECK( cudaFree( reinterpret_cast<void*>( state.sbt.raygenRecord ) ) );
-    CUDA_CHECK( cudaFree( reinterpret_cast<void*>( state.sbt.missRecordBase ) ) );
-    CUDA_CHECK( cudaFree( reinterpret_cast<void*>( state.sbt.hitgroupRecordBase ) ) );
-    CUDA_CHECK( cudaFree( reinterpret_cast<void*>( state.d_vertices ) ) );
-    CUDA_CHECK( cudaFree( reinterpret_cast<void*>( state.d_gas_output_buffer ) ) );
-    CUDA_CHECK( cudaFree( reinterpret_cast<void*>( state.params.accum_buffer ) ) );
-    CUDA_CHECK( cudaFree( reinterpret_cast<void*>( state.d_params ) ) );
+    glutPostRedisplay();
 }
 
 
@@ -975,169 +552,102 @@ void cleanupState( PathTracerState& state )
 //
 //------------------------------------------------------------------------------
 
-int main( int argc, char* argv[] )
+void printUsageAndExit( const std::string& argv0 )
 {
-    PathTracerState state;
-    state.params.width                             = 768;
-    state.params.height                            = 768;
-    sutil::CUDAOutputBufferType output_buffer_type = sutil::CUDAOutputBufferType::GL_INTEROP;
+    std::cerr << "\nUsage: " << argv0 << " [options]\n";
+    std::cerr <<
+        "App Options:\n"
+        "  -h | --help               Print this usage message and exit.\n"
+        "  -f | --file               Save single frame to file and exit.\n"
+        "  -n | --nopbo              Disable GL interop for display buffer.\n"
+        "  -d | --dim=<width>x<height> Set image dimensions. Defaults to 512x512\n"
+        "App Keystrokes:\n"
+        "  q  Quit\n" 
+        "  s  Save image to '" << SAMPLE_NAME << ".ppm'\n"
+        << std::endl;
 
-    //
-    // Parse command line options
-    //
-    std::string outfile;
+    exit(1);
+}
 
-    for( int i = 1; i < argc; ++i )
+
+int main( int argc, char** argv )
+ {
+    std::string out_file;
+    for( int i=1; i<argc; ++i )
     {
-        const std::string arg = argv[i];
-        if( arg == "--help" || arg == "-h" )
+        const std::string arg( argv[i] );
+
+        if( arg == "-h" || arg == "--help" )
         {
             printUsageAndExit( argv[0] );
         }
-        else if( arg == "--no-gl-interop" )
+        else if( arg == "-f" || arg == "--file"  )
         {
-            output_buffer_type = sutil::CUDAOutputBufferType::CUDA_DEVICE;
-        }
-        else if( arg == "--file" || arg == "-f" )
-        {
-            if( i >= argc - 1 )
+            if( i == argc-1 )
+            {
+                std::cerr << "Option '" << arg << "' requires additional argument.\n";
                 printUsageAndExit( argv[0] );
-            outfile = argv[++i];
+            }
+            out_file = argv[++i];
         }
-        else if( arg.substr( 0, 6 ) == "--dim=" )
+        else if( arg == "-n" || arg == "--nopbo"  )
         {
-            const std::string dims_arg = arg.substr( 6 );
-            int w, h;
-            sutil::parseDimensions( dims_arg.c_str(), w, h );
-            state.params.width  = w;
-            state.params.height = h;
+            use_pbo = false;
         }
-        else if( arg == "--launch-samples" || arg == "-s" )
+        else if( arg.find( "-d" ) == 0 || arg.find( "--dim" ) == 0 )
         {
-            if( i >= argc - 1 )
+            size_t index = arg.find_first_of( '=' );
+            if( index == std::string::npos )
+            {
+                std::cerr << "Option '" << arg << " is malformed. Please use the syntax -d | --dim=<width>x<height>.\n";
                 printUsageAndExit( argv[0] );
-            samples_per_launch = atoi( argv[++i] );
+            }
+            std::string dim = arg.substr( index+1 );
+            try
+            {
+                sutil::parseDimensions( dim.c_str(), (int&)width, (int&)height );
+            }
+            catch( const Exception& )
+            {
+                std::cerr << "Option '" << arg << " is malformed. Please use the syntax -d | --dim=<width>x<height>.\n";
+                printUsageAndExit( argv[0] );
+            }
         }
         else
         {
-            std::cerr << "Unknown option '" << argv[i] << "'\n";
+            std::cerr << "Unknown option '" << arg << "'\n";
             printUsageAndExit( argv[0] );
         }
     }
 
     try
     {
-        initCameraState();
+        glutInitialize( &argc, argv );
 
-        //
-        // Set up OptiX state
-        //
-        createContext( state );
-        buildMeshAccel( state );
-        createModule( state );
-        createProgramGroups( state );
-        createPipeline( state );
-        createSBT( state );
-        initLaunchParams( state );
+#ifndef __APPLE__
+        glewInit();
+#endif
 
+        createContext();
+        setupCamera();
+        loadGeometry();
 
-        if( outfile.empty() )
+        context->validate();
+
+        if ( out_file.empty() )
         {
-            GLFWwindow* window = sutil::initUI( "optixPathTracer", state.params.width, state.params.height );
-            glfwSetMouseButtonCallback( window, mouseButtonCallback );
-            glfwSetCursorPosCallback( window, cursorPosCallback );
-            glfwSetWindowSizeCallback( window, windowSizeCallback );
-            glfwSetWindowIconifyCallback( window, windowIconifyCallback );
-            glfwSetKeyCallback( window, keyCallback );
-            glfwSetScrollCallback( window, scrollCallback );
-            glfwSetWindowUserPointer( window, &state.params );
-
-            //
-            // Render loop
-            //
-            {
-                sutil::CUDAOutputBuffer<uchar4> output_buffer(
-                        output_buffer_type,
-                        state.params.width,
-                        state.params.height
-                        );
-
-                output_buffer.setStream( state.stream );
-                sutil::GLDisplay gl_display;
-
-                std::chrono::duration<double> state_update_time( 0.0 );
-                std::chrono::duration<double> render_time( 0.0 );
-                std::chrono::duration<double> display_time( 0.0 );
-
-                do
-                {
-                    auto t0 = std::chrono::steady_clock::now();
-                    glfwPollEvents();
-
-                    updateState( output_buffer, state.params );
-                    auto t1 = std::chrono::steady_clock::now();
-                    state_update_time += t1 - t0;
-                    t0 = t1;
-
-                    launchSubframe( output_buffer, state );
-                    t1 = std::chrono::steady_clock::now();
-                    render_time += t1 - t0;
-                    t0 = t1;
-
-                    displaySubframe( output_buffer, gl_display, window );
-                    t1 = std::chrono::steady_clock::now();
-                    display_time += t1 - t0;
-
-                    sutil::displayStats( state_update_time, render_time, display_time );
-
-                    glfwSwapBuffers( window );
-
-                    ++state.params.subframe_index;
-                } while( !glfwWindowShouldClose( window ) );
-                CUDA_SYNC_CHECK();
-            }
-
-            sutil::cleanupUI( window );
+            glutRun();
         }
         else
         {
-            if( output_buffer_type == sutil::CUDAOutputBufferType::GL_INTEROP )
-            {
-                sutil::initGLFW();  // For GL context
-                sutil::initGL();
-            }
-
-            sutil::CUDAOutputBuffer<uchar4> output_buffer(
-                    output_buffer_type,
-                    state.params.width,
-                    state.params.height
-                    );
-
-            handleCameraUpdate( state.params );
-            handleResize( output_buffer, state.params );
-            launchSubframe( output_buffer, state );
-
-            sutil::ImageBuffer buffer;
-            buffer.data         = output_buffer.getHostPointer();
-            buffer.width        = output_buffer.width();
-            buffer.height       = output_buffer.height();
-            buffer.pixel_format = sutil::BufferImageFormat::UNSIGNED_BYTE4;
-
-            sutil::saveImage( outfile.c_str(), buffer, false );
-
-            if( output_buffer_type == sutil::CUDAOutputBufferType::GL_INTEROP )
-            {
-                glfwTerminate();
-            }
+            updateCamera();
+            context->launch( 0, width, height );
+            sutil::displayBufferPPM( out_file.c_str(), getOutputBuffer(), false );
+            destroyContext();
         }
 
-        cleanupState( state );
+        return 0;
     }
-    catch( std::exception& e )
-    {
-        std::cerr << "Caught exception: " << e.what() << "\n";
-        return 1;
-    }
-
-    return 0;
+    SUTIL_CATCH( context->get() )
 }
+

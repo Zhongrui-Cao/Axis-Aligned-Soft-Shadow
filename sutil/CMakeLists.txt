@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
+# Copyright (c) 2018, NVIDIA CORPORATION. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -27,79 +27,116 @@
 #
 
 set(sources
-    ${CMAKE_CURRENT_BINARY_DIR}/../sampleConfig.h
-    ${SAMPLES_CUDA_DIR}/sphere.cu
-    ${SAMPLES_CUDA_DIR}/whitted.cu
-    ${SAMPLES_CUDA_DIR}/BufferView.h
-    ${SAMPLES_CUDA_DIR}/GeometryData.h
-    ${SAMPLES_CUDA_DIR}/Light.h
-    ${SAMPLES_CUDA_DIR}/LocalGeometry.h
-    ${SAMPLES_CUDA_DIR}/MaterialData.h
-    ${SAMPLES_CUDA_DIR}/util.h
-    ${SAMPLES_CUDA_DIR}/helpers.h
-    Aabb.h
-    Camera.cpp
-    Camera.h
-    CUDAOutputBuffer.h
-    Exception.h
-    GLDisplay.cpp
-    GLDisplay.h
-    Matrix.h
-    PPMLoader.cpp
-    PPMLoader.h
-    Preprocessor.h
-    Quaternion.h
-    Record.h
-    Scene.cpp
-    Scene.h
-    sutilapi.h
-    sutil.cpp
-    sutil.h
-    Trackball.cpp
-    Trackball.h
-    vec_math.h
-    )
+  ${SAMPLES_CUDA_DIR}/common.h
+  ${SAMPLES_CUDA_DIR}/helpers.h
+  ${SAMPLES_CUDA_DIR}/intersection_refinement.h
+  ${SAMPLES_CUDA_DIR}/phong.h
+  ${SAMPLES_CUDA_DIR}/phong.cu
+  ${SAMPLES_CUDA_DIR}/random.h
+  ${SAMPLES_CUDA_DIR}/triangle_mesh.cu
+  rply-1.01/rply.c
+  rply-1.01/rply.h
+  Arcball.cpp
+  Arcball.h
+  HDRLoader.cpp
+  HDRLoader.h
+  Mesh.cpp
+  Mesh.h
+  OptiXMesh.cpp
+  OptiXMesh.h
+  PPMLoader.cpp
+  PPMLoader.h
+  ${CMAKE_CURRENT_BINARY_DIR}/../sampleConfig.h
+  sutil.cpp
+  sutil.h
+  sutilapi.h
+  tinyobjloader/tiny_obj_loader.cc
+  tinyobjloader/tiny_obj_loader.h
+  )
 
+if(OPENGL_FOUND AND NOT APPLE)
+  list(APPEND sources "glew.c" "GL/glew.h")
+  if( WIN32 )
+    list(APPEND sources "GL/wglew.h")
+  else()
+    list(APPEND sources "GL/glxew.h")
+  endif()
+
+  if( WIN32 )
+    add_definitions(-DGLEW_BUILD)
+  endif()
+
+  if(USING_GNU_CXX OR USING_CLANG_CXX)
+    # glew.c #includes glew.h which contains "lax" function prototypes
+    set_source_files_properties("glew.c" PROPERTIES COMPILE_FLAGS  "-Wno-strict-prototypes -Wno-missing-prototypes")
+
+  endif()
+
+endif()
+
+if(GLUT_FOUND AND OPENGL_FOUND)
+  include_directories(${GLUT_INCLUDE_DIR})
+  add_definitions(-DGLUT_FOUND -DGLUT_NO_LIB_PRAGMA)
+
+endif()
 
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+# For common.h
+include_directories(${SAMPLES_CUDA_DIR})
 
+# Compile the cuda files to ptx.  Note that this will ignore all of the non CUDA
+# files.
 if(NOT CUDA_NVRTC_ENABLED)
-  OPTIX_sutil_compile_to_optix_input(ptx_files ${sources})
-else()
-  set(ptx_files)
+  CUDA_COMPILE_PTX(ptx_files ${sources})
 endif()
-
-OPTIX_add_source_groups()
 
 # Make the library.
-set(sutil_target "sutil_7_sdk")
-add_library(${sutil_target} ${sources} ${ptx_files})
-if( WIN32 )
-  target_compile_definitions( ${sutil_target} PUBLIC GLAD_GLAPI_EXPORT )
+set(sutil_target "sutil_sdk")
+if(CUDA_NVRTC_ENABLED)
+  add_library(${sutil_target} ${sources})
+else()
+  add_library(${sutil_target} ${sources} ${ptx_files})
 endif()
 
-target_link_libraries(${sutil_target} LINK_PRIVATE
-  ${GLFW_LIB_NAME}
-  glad
-  imgui
-  ${CUDA_LIBRARIES}
-  )
-
-# Use gcc rather than g++ to link if we are linking statically against libgcc_s and libstdc++
 if(USING_GNU_C OR USING_GNU_CXX)
+  # Use gcc rather than g++ to link if we are linking statically against libgcc_s and libstdc++
   if(GCC_LIBSTDCPP_HACK)
     set_target_properties(${sutil_target} PROPERTIES LINKER_LANGUAGE "C")
     target_link_libraries(${sutil_target} LINK_PRIVATE ${STATIC_LIBSTDCPP})
   endif()
 endif()
 
-
+# Note that if the GLUT_LIBRARIES and OPENGL_LIBRARIES haven't been looked for,
+# these variable will be empty.
+target_link_libraries(${sutil_target}
+  optix
+  ${GLUT_LIBRARIES}
+  ${OPENGL_LIBRARIES}
+  )
 if(CUDA_NVRTC_ENABLED)
-  target_link_libraries(${sutil_target} LINK_PRIVATE ${CUDA_nvrtc_LIBRARY})
+  target_link_libraries(${sutil_target}  ${CUDA_nvrtc_LIBRARY})
 endif()
 if(WIN32)
-  target_link_libraries(${sutil_target} LINK_PRIVATE winmm.lib)
+  target_link_libraries(${sutil_target} winmm.lib)
+endif()
+
+# Copy the free glut dlls as part of the sutil build process
+if(WIN32)
+  if(CMAKE_GENERATOR MATCHES "Visual Studio")
+    set( build_configuration "$(ConfigurationName)" )
+  else()
+    set( build_configuration "${CMAKE_BUILD_TYPE}")
+  endif()
+
+  add_custom_command(TARGET ${sutil_target}
+    POST_BUILD
+    COMMAND ${CMAKE_COMMAND}
+    -D build_configuration:STRING=${build_configuration}
+    -D "output_directory:PATH=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${CMAKE_CFG_INTDIR}"
+    -D "source_dll:FILE=${GLUT_glut_DLL}"
+    -P "${CMAKE_SOURCE_DIR}/CMake/CopyDLL.cmake"
+    )
 endif()
 
 # Make the list of sources available to the parent directory for installation needs.
@@ -107,8 +144,21 @@ set(sutil_sources "${sources}" PARENT_SCOPE)
 
 set_property(TARGET ${sutil_target} PROPERTY FOLDER "${OPTIX_IDE_FOLDER}")
 
-# Disable until we get binary samples
-if(0 AND RELEASE_INSTALL_BINARY_SAMPLES AND NOT RELEASE_STATIC_BUILD)
+#######################################
+#######################################
+#######################################
+
+#    ONLY INSTALL COMMANDS BELOW      #
+
+#######################################
+#######################################
+#######################################
+
+if( OPTIX_BUILD_7_SDK_PACKAGE )
+  return()
+endif()
+
+if(RELEASE_INSTALL_BINARY_SAMPLES AND NOT RELEASE_STATIC_BUILD)
   # If performing a release install, we want to use rpath for our install name.
   # The executables' rpaths will then be set to @executable_path so we can invoke
   # the samples from an arbitrary location and it will still find this library.
