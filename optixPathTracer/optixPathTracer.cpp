@@ -92,6 +92,16 @@ sutil::Arcball arcball;
 int2           mouse_prev_pos;
 int            mouse_button;
 
+// Move state
+bool           W = false;
+bool           A = false;
+bool           S = false;
+bool           D = false;
+bool           UP = false;
+bool           DOWN = false;
+float camera_speed = 10.0f;
+
+
 
 //------------------------------------------------------------------------------
 //
@@ -111,6 +121,7 @@ void glutRun();
 
 void glutDisplay();
 void glutKeyboardPress( unsigned char k, int x, int y );
+void glutKeyboardUp(unsigned char k, int x, int y);
 void glutMousePress( int button, int state, int x, int y );
 void glutMouseMotion( int x, int y);
 void glutResize( int w, int h );
@@ -355,9 +366,9 @@ void setupCamera()
     camera_eye    = make_float3( 278.0f, 273.0f, -900.0f );
     camera_lookat = make_float3( 278.0f, 273.0f,    0.0f );
     camera_up     = make_float3(   0.0f,   1.0f,    0.0f );
-    camera_pos = make_float3(278.0f, 273.0f, 900.0f);
-    camera_pitch = 0.0f;
-    camera_yaw = 1.55f;
+    camera_pos    = make_float3(278.0f, 273.0f, -900.0f);
+    camera_pitch  = 0.0f;
+    camera_yaw    = 1.55f;
 
     camera_rotate  = Matrix4x4::identity();
 }
@@ -368,9 +379,40 @@ void updateCamera()
     const float fov  = 35.0f;
     const float aspect_ratio = static_cast<float>(width) / static_cast<float>(height);
 
-    float3 fwd = make_float3(cos(camera_pitch) * cos(camera_yaw), sin(camera_pitch), cos(camera_pitch) * sin(camera_yaw));
-    float3 camera_lookat = camera_pos + fwd;
-    
+    float3 front = make_float3(cos(camera_pitch) * cos(camera_yaw), sin(camera_pitch), cos(camera_pitch) * sin(camera_yaw));
+    front = normalize(front);
+    float3 right = cross(front, make_float3(0.0f, 1.0f, 0.0f));
+
+    //cam movement
+    if (D) {
+        printf("d");
+        camera_pos += right * camera_speed;
+    }
+    if (A) {
+        printf("a");
+        camera_pos -= right * camera_speed;
+    }
+    if (W) {
+        printf("w");
+        camera_pos += front * camera_speed;
+    }
+    if (S) {
+        printf("s");
+        camera_pos -= front * camera_speed;
+    }
+    if (UP) {
+        printf("q");
+        camera_pos += camera_up * camera_speed;
+    }
+    if (DOWN) {
+        printf("e");
+        camera_pos -= camera_up * camera_speed;
+    }
+
+    printf("camera_pos x=%g y=%g z=%g \n", camera_pos.x, camera_pos.y, camera_pos.z);
+
+    float3 camera_lookat = camera_pos + front;
+
     float3 camera_u, camera_v, camera_w;
     sutil::calculateCameraVariables(
         camera_pos, camera_lookat, camera_up, fov, aspect_ratio,
@@ -381,7 +423,7 @@ void updateCamera()
     camera_changed = false;
 
     context[ "frame_number" ]->setUint( frame_number++ );
-    context[ "eye"]->setFloat( camera_eye );
+    context[ "eye"]->setFloat( camera_pos );
     context[ "U"  ]->setFloat( camera_u );
     context[ "V"  ]->setFloat( camera_v );
     context[ "W"  ]->setFloat( camera_w );
@@ -420,6 +462,7 @@ void glutRun()
     glutIdleFunc( glutDisplay );
     glutReshapeFunc( glutResize );
     glutKeyboardFunc( glutKeyboardPress );
+    glutKeyboardUpFunc(glutKeyboardUp);
     glutMouseFunc( glutMousePress );
     glutMotionFunc( glutMouseMotion );
 
@@ -453,23 +496,94 @@ void glutDisplay()
 
 void glutKeyboardPress( unsigned char k, int x, int y )
 {
-
     switch( k )
     {
-        case( 'q' ):
         case( 27 ): // ESC
         {
             destroyContext();
             exit(0);
         }
-        case( 's' ):
+        case( 'p' ):
         {
             const std::string outputImage = std::string(SAMPLE_NAME) + ".ppm";
             std::cerr << "Saving current frame to '" << outputImage << "'\n";
             sutil::displayBufferPPM( outputImage.c_str(), getOutputBuffer(), false );
             break;
         }
+        case('r'):
+        {
+            setupCamera();
+            break;
+        }
+        case('w'):
+        {
+            W = true;
+            break;
+        }
+        case('a'):
+        {
+            A = true;
+            break;
+        }
+        case('s'):
+        {
+            S = true;
+            break;
+        }
+        case('d'):
+        {
+            D = true;
+            break;
+        }
+        case('q'):
+        {
+            UP = true;
+            break;
+        }
+        case('e'):
+        {
+            DOWN = true;
+            break;
+        }
     }
+}
+
+void glutKeyboardUp( unsigned char k, int x, int y )
+{
+    switch (k)
+    {
+        case('w'):
+        {
+            W = false;
+            break;
+        }
+        case('a'):
+        {
+            A = false;
+            break;
+        }
+        case('s'):
+        {
+            S = false;
+            break;
+        }
+        case('d'):
+        {
+            D = false;
+            break;
+        }
+        case('q'):
+        {
+            UP = false;
+            break;
+        }
+        case('e'):
+        {
+            DOWN = false;
+            break;
+        }
+    }
+
 }
 
 
@@ -497,7 +611,7 @@ void glutMouseMotion( int x, int y)
                          static_cast<float>( height );
         const float dmax = fabsf( dx ) > fabs( dy ) ? dx : dy;
         const float scale = std::min<float>( dmax, 0.9f );
-        camera_eye = camera_eye + (camera_lookat - camera_eye)*scale;
+        camera_pos = camera_pos + (camera_lookat - camera_pos)*scale;
         camera_changed = true;
     }
     else if( mouse_button == GLUT_LEFT_BUTTON )
