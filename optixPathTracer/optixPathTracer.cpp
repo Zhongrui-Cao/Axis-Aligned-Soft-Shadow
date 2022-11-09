@@ -55,6 +55,9 @@
 #include <cstring>
 #include <iostream>
 #include <stdint.h>
+#include <list>
+#include <numeric>
+#include <vector>
 
 using namespace optix;
 
@@ -203,7 +206,7 @@ void createContext()
 {
     context = Context::create();
     context->setRayTypeCount( 2 );
-    context->setEntryPointCount( 1 );
+    context->setEntryPointCount( 4 );
     context->setStackSize( 1800 );
     context->setMaxTraceDepth( 2 );
 
@@ -213,11 +216,58 @@ void createContext()
     Buffer buffer = sutil::createOutputBuffer( context, RT_FORMAT_FLOAT4, width, height, use_pbo );
     context["output_buffer"]->set( buffer );
 
+    // my buffers
+    Buffer resultBuffer = sutil::createOutputBuffer(context, RT_FORMAT_FLOAT3, width, height, false);
+    context["result_buffer"]->set(resultBuffer);
+
+    Buffer hitBuffer = sutil::createOutputBuffer(context, RT_FORMAT_FLOAT3, width, height, false);
+    context["hit_buffer"]->set(hitBuffer);
+
+    Buffer normalBuffer = sutil::createOutputBuffer(context, RT_FORMAT_FLOAT3, width, height, false);
+    context["normal_buffer"]->set(normalBuffer);
+
+    Buffer ffnormalBuffer = sutil::createOutputBuffer(context, RT_FORMAT_FLOAT3, width, height, false);
+    context["ffnormal_buffer"]->set(ffnormalBuffer);
+    
+    Buffer objectidBuffer = sutil::createOutputBuffer(context, RT_FORMAT_FLOAT, width, height, false);
+    context["object_id_buffer"]->set(objectidBuffer);
+
+    Buffer d1Buffer = sutil::createOutputBuffer(context, RT_FORMAT_FLOAT, width, height, false);
+    context["d1_buffer"]->set(d1Buffer);
+
+    Buffer d2MinBuffer = sutil::createOutputBuffer(context, RT_FORMAT_FLOAT, width, height, false);
+    context["d2_min_buffer"]->set(d2MinBuffer);
+
+    Buffer d2MaxBuffer = sutil::createOutputBuffer(context, RT_FORMAT_FLOAT, width, height, false);
+    context["d2_max_buffer"]->set(d2MaxBuffer);
+
+    Buffer heatmapBuffer = sutil::createOutputBuffer(context, RT_FORMAT_FLOAT3, width, height, false);
+    context["heatmap_buffer"]->set(heatmapBuffer);
+    // heat map shows d1
+    context["input_buffer"]->set(d1Buffer);
+
+
     // Setup programs
     const char *ptx = sutil::getPtxString( SAMPLE_NAME, "optixPathTracer.cu" );
     context->setRayGenerationProgram( 0, context->createProgramFromPTXString( ptx, "pathtrace_camera" ) );
     context->setExceptionProgram( 0, context->createProgramFromPTXString( ptx, "exception" ) );
     context->setMissProgram( 0, context->createProgramFromPTXString( ptx, "miss" ) );
+
+    // my programs
+    const char* aa_ptx = sutil::getPtxString(SAMPLE_NAME, "AA.cu");
+    const char* hm_ptx = sutil::getPtxString(SAMPLE_NAME, "heatmap.cu");
+
+    // get distance: 1
+    context->setRayGenerationProgram(1, context->createProgramFromPTXString(aa_ptx, "get_distance"));
+    context->setExceptionProgram(1, context->createProgramFromPTXString(aa_ptx, "exception"));
+    context->setMissProgram(1, context->createProgramFromPTXString(aa_ptx, "miss"));
+
+    // trace primary ray: 2
+    context->setRayGenerationProgram(2, context->createProgramFromPTXString(aa_ptx, "aa_trace_firstpass"));
+
+
+    // heat map program: 3
+    context->setRayGenerationProgram(3, context->createProgramFromPTXString(hm_ptx, "get_heatmap"));
 
     context[ "sqrt_num_samples" ]->setUint( sqrt_num_samples );
     context[ "bad_color"        ]->setFloat( 1000000.0f, 0.0f, 1000000.0f ); // Super magenta to make sure it doesn't get averaged out in the progressive rendering.
@@ -246,11 +296,20 @@ void loadGeometry()
 
     // Set up material
     Material diffuse = context->createMaterial();
+    /*
     const char *ptx = sutil::getPtxString( SAMPLE_NAME, "optixPathTracer.cu" );
     Program diffuse_ch = context->createProgramFromPTXString( ptx, "diffuse" );
     Program diffuse_ah = context->createProgramFromPTXString( ptx, "shadow" );
     diffuse->setClosestHitProgram( 0, diffuse_ch );
     diffuse->setAnyHitProgram( 1, diffuse_ah );
+    */
+    const char* ptx = sutil::getPtxString(SAMPLE_NAME, "optixPathTracer.cu");
+    const char* ptx_aa = sutil::getPtxString(SAMPLE_NAME, "AA.cu");
+
+    Program diffuse_ch = context->createProgramFromPTXString(ptx_aa, "geometry_hit");
+    Program diffuse_ah = context->createProgramFromPTXString(ptx_aa, "shadow");
+    diffuse->setClosestHitProgram(0, diffuse_ch);
+    diffuse->setAnyHitProgram(1, diffuse_ah);
 
     Material diffuse_light = context->createMaterial();
     Program diffuse_em = context->createProgramFromPTXString( ptx, "diffuseEmitter" );
@@ -260,6 +319,10 @@ void loadGeometry()
     ptx = sutil::getPtxString( SAMPLE_NAME, "parallelogram.cu" );
     pgram_bounding_box = context->createProgramFromPTXString( ptx, "bounds" );
     pgram_intersection = context->createProgramFromPTXString( ptx, "intersect" );
+
+
+    // create geometry instances
+    {
 
     // create geometry instances
     std::vector<GeometryInstance> gis;
@@ -358,6 +421,8 @@ void loadGeometry()
     GeometryGroup geometry_group = context->createGeometryGroup(gis.begin(), gis.end());
     geometry_group->setAcceleration( context->createAcceleration( "Trbvh" ) );
     context["top_object"]->set( geometry_group );
+
+    }
 }
 
   
@@ -385,31 +450,23 @@ void updateCamera()
 
     //cam movement
     if (D) {
-        printf("d");
         camera_pos += right * camera_speed;
     }
     if (A) {
-        printf("a");
         camera_pos -= right * camera_speed;
     }
     if (W) {
-        printf("w");
         camera_pos += front * camera_speed;
     }
     if (S) {
-        printf("s");
         camera_pos -= front * camera_speed;
     }
     if (UP) {
-        printf("q");
         camera_pos += camera_up * camera_speed;
     }
     if (DOWN) {
-        printf("e");
         camera_pos -= camera_up * camera_speed;
     }
-
-    printf("camera_pos x=%g y=%g z=%g \n", camera_pos.x, camera_pos.y, camera_pos.z);
 
     float3 camera_lookat = camera_pos + front;
 
@@ -471,6 +528,18 @@ void glutRun()
     glutMainLoop();
 }
 
+void diaplayHeatmap(Buffer buffer, float estimated_max)
+{
+    // Normalize and display the beta buffer
+    float minValue, maxValue, avgValue;
+    //getBufferMinMax(buffer, minValue, maxValue, avgValue);
+    context["max_value"]->setFloat(estimated_max);
+    context["input_buffer"]->set(buffer);
+    context->launch(3, width, height);
+
+    sutil::displayBufferGL(context["heatmap_buffer"]->getBuffer());
+}
+
 
 //------------------------------------------------------------------------------
 //
@@ -481,9 +550,12 @@ void glutRun()
 void glutDisplay()
 {
     updateCamera();
-    context->launch( 0, width, height );
+    //context->launch(0, width, height);
+    context->launch(1, width, height);
+    context->launch(2, width, height);
 
-    sutil::displayBufferGL( getOutputBuffer() );
+    //sutil::displayBufferGL( getOutputBuffer() );
+    diaplayHeatmap(context["d1_buffer"]->getBuffer(), 675.0f);
 
     {
       static unsigned frame_count = 0;
@@ -547,6 +619,7 @@ void glutKeyboardPress( unsigned char k, int x, int y )
         }
     }
 }
+
 
 void glutKeyboardUp( unsigned char k, int x, int y )
 {
