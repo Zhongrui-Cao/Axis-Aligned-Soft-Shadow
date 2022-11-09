@@ -241,6 +241,12 @@ void createContext()
     Buffer d2MaxBuffer = sutil::createOutputBuffer(context, RT_FORMAT_FLOAT, width, height, false);
     context["d2_max_buffer"]->set(d2MaxBuffer);
 
+    Buffer projectedDistBuffer = sutil::createOutputBuffer(context, RT_FORMAT_FLOAT, width, height, false);
+    context["projected_dist_buffer"]->set(projectedDistBuffer);
+
+    Buffer sppBuffer = sutil::createOutputBuffer(context, RT_FORMAT_FLOAT, width, height, false);
+    context["spp_buffer"]->set(sppBuffer);
+
     Buffer heatmapBuffer = sutil::createOutputBuffer(context, RT_FORMAT_FLOAT3, width, height, false);
     context["heatmap_buffer"]->set(heatmapBuffer);
     // heat map shows d1
@@ -265,13 +271,16 @@ void createContext()
     // trace primary ray: 2
     context->setRayGenerationProgram(2, context->createProgramFromPTXString(aa_ptx, "aa_trace_firstpass"));
 
-
     // heat map program: 3
     context->setRayGenerationProgram(3, context->createProgramFromPTXString(hm_ptx, "get_heatmap"));
 
     context[ "sqrt_num_samples" ]->setUint( sqrt_num_samples );
     context[ "bad_color"        ]->setFloat( 1000000.0f, 0.0f, 1000000.0f ); // Super magenta to make sure it doesn't get averaged out in the progressive rendering.
     context[ "bg_color"         ]->setFloat( make_float3(0.0f) );
+
+    // my vars
+    context["img_width"]->setUint(width);
+    context["img_height"]->setUint(width);
 }
 
 
@@ -320,7 +329,6 @@ void loadGeometry()
     pgram_bounding_box = context->createProgramFromPTXString( ptx, "bounds" );
     pgram_intersection = context->createProgramFromPTXString( ptx, "intersect" );
 
-
     // create geometry instances
     {
 
@@ -351,10 +359,13 @@ void loadGeometry()
     setMaterial(gis.back(), diffuse, "diffuse_color", white);
 
     // Right wall
+    /*
     gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 0.0f ),
                                         make_float3( 0.0f, 548.8f, 0.0f ),
                                         make_float3( 0.0f, 0.0f, 559.2f ) ) );
     setMaterial(gis.back(), diffuse, "diffuse_color", green);
+    */
+
 
     // Left wall
     gis.push_back( createParallelogram( make_float3( 556.0f, 0.0f, 0.0f ),
@@ -528,18 +539,17 @@ void glutRun()
     glutMainLoop();
 }
 
+
 void diaplayHeatmap(Buffer buffer, float estimated_max)
 {
     // Normalize and display the beta buffer
     float minValue, maxValue, avgValue;
-    //getBufferMinMax(buffer, minValue, maxValue, avgValue);
     context["max_value"]->setFloat(estimated_max);
     context["input_buffer"]->set(buffer);
     context->launch(3, width, height);
 
     sutil::displayBufferGL(context["heatmap_buffer"]->getBuffer());
 }
-
 
 //------------------------------------------------------------------------------
 //
@@ -555,7 +565,12 @@ void glutDisplay()
     context->launch(2, width, height);
 
     //sutil::displayBufferGL( getOutputBuffer() );
-    diaplayHeatmap(context["d1_buffer"]->getBuffer(), 675.0f);
+    //diaplayHeatmap(context["d1_buffer"]->getBuffer(), 675.0f);
+    //diaplayHeatmap(context["d2_min_buffer"]->getBuffer(), 500.0f);
+    //diaplayHeatmap(context["d2_max_buffer"]->getBuffer(), 640.0f);
+    //diaplayHeatmap(context["projected_dist_buffer"]->getBuffer(), 30.0f);
+    diaplayHeatmap(context["spp_buffer"]->getBuffer(), 100.0f);
+    //sutil::displayBufferGL(context["result_buffer"]->getBuffer());
 
     {
       static unsigned frame_count = 0;
