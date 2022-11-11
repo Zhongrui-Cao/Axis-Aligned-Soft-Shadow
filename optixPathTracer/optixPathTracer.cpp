@@ -249,8 +249,11 @@ void createContext()
 
     Buffer heatmapBuffer = sutil::createOutputBuffer(context, RT_FORMAT_FLOAT3, width, height, false);
     context["heatmap_buffer"]->set(heatmapBuffer);
-    // heat map shows d1
+    // for compiler
     context["input_buffer"]->set(d1Buffer);
+
+    Buffer isLightBuffer = sutil::createOutputBuffer(context, RT_FORMAT_BYTE, width, height, false);
+    context["islight_buffer"]->set(isLightBuffer);
 
 
     // Setup programs
@@ -292,7 +295,11 @@ void loadGeometry()
     light.v1       = make_float3( -130.0f, 0.0f, 0.0f);
     light.v2       = make_float3( 0.0f, 0.0f, 105.0f);
     light.normal   = normalize( cross(light.v1, light.v2) );
-    light.emission = make_float3( 15.0f, 15.0f, 5.0f );
+    light.emission = make_float3( 20.0f, 20.0f, 20.0f );
+
+    float3 norm = cross(light.v1, light.v2);
+    float sigma = sqrt(length(norm) / 4.0f);
+    context["light_sigma"]->setFloat(sigma);
 
     Buffer light_buffer = context->createBuffer( RT_BUFFER_INPUT );
     light_buffer->setFormat( RT_FORMAT_USER );
@@ -321,7 +328,7 @@ void loadGeometry()
     diffuse->setAnyHitProgram(1, diffuse_ah);
 
     Material diffuse_light = context->createMaterial();
-    Program diffuse_em = context->createProgramFromPTXString( ptx, "diffuseEmitter" );
+    Program diffuse_em = context->createProgramFromPTXString(ptx_aa, "diffuseEmitter" );
     diffuse_light->setClosestHitProgram( 0, diffuse_em );
 
     // Set up parallelogram programs
@@ -560,17 +567,23 @@ void diaplayHeatmap(Buffer buffer, float estimated_max)
 void glutDisplay()
 {
     updateCamera();
+
+    // TODO
+    // reference ground truth, not working for some reason??????
     //context->launch(0, width, height);
-    context->launch(1, width, height);
+
+    // trace primary ray
     context->launch(2, width, height);
+    // get distance and trace with adap spp
+    context->launch(1, width, height);
 
     //sutil::displayBufferGL( getOutputBuffer() );
     //diaplayHeatmap(context["d1_buffer"]->getBuffer(), 675.0f);
     //diaplayHeatmap(context["d2_min_buffer"]->getBuffer(), 500.0f);
     //diaplayHeatmap(context["d2_max_buffer"]->getBuffer(), 640.0f);
     //diaplayHeatmap(context["projected_dist_buffer"]->getBuffer(), 30.0f);
-    diaplayHeatmap(context["spp_buffer"]->getBuffer(), 100.0f);
-    //sutil::displayBufferGL(context["result_buffer"]->getBuffer());
+    //diaplayHeatmap(context["spp_buffer"]->getBuffer(), 100.0f);
+    sutil::displayBufferGL(context["result_buffer"]->getBuffer());
 
     {
       static unsigned frame_count = 0;
