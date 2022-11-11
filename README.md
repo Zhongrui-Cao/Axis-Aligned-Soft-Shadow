@@ -2,7 +2,7 @@
 
 ## Current results
 Here are some of the results of my denoiser right now\
-Noisy image is on the left and filtered is on the right
+Noisy image is on the left (adaptive sampled but not filtered) and filtered is on the right
 
 Noisy             |  Filtered
 :-------------------------:|:-------------------------:
