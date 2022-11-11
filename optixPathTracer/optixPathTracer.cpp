@@ -210,7 +210,7 @@ void createContext()
     context->setStackSize( 1800 );
     context->setMaxTraceDepth( 2 );
 
-    context[ "scene_epsilon"                  ]->setFloat( 1.e-3f );
+    context[ "scene_epsilon"                  ]->setFloat( 0.1f );
     context[ "rr_begin_depth"                 ]->setUint( rr_begin_depth );
 
     Buffer buffer = sutil::createOutputBuffer( context, RT_FORMAT_FLOAT4, width, height, use_pbo );
@@ -582,8 +582,8 @@ void glutDisplay()
     //diaplayHeatmap(context["d2_min_buffer"]->getBuffer(), 500.0f);
     //diaplayHeatmap(context["d2_max_buffer"]->getBuffer(), 640.0f);
     //diaplayHeatmap(context["projected_dist_buffer"]->getBuffer(), 30.0f);
-    //diaplayHeatmap(context["spp_buffer"]->getBuffer(), 100.0f);
-    sutil::displayBufferGL(context["result_buffer"]->getBuffer());
+    diaplayHeatmap(context["spp_buffer"]->getBuffer(), 100.0f);
+    //sutil::displayBufferGL(context["result_buffer"]->getBuffer());
 
     {
       static unsigned frame_count = 0;
