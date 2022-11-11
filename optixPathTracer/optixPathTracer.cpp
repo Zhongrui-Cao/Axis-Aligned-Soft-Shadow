@@ -104,6 +104,13 @@ bool           UP = false;
 bool           DOWN = false;
 float camera_speed = 10.0f;
 
+// Display state
+bool           NOISY = false;
+bool           D1 = false;
+bool           D2MIN = false;
+bool           D2MAX = false;
+bool           SPP = false;
+bool           BETA = false;
 
 
 //------------------------------------------------------------------------------
@@ -206,7 +213,7 @@ void createContext()
 {
     context = Context::create();
     context->setRayTypeCount( 2 );
-    context->setEntryPointCount( 4 );
+    context->setEntryPointCount( 7 );
     context->setStackSize( 1800 );
     context->setMaxTraceDepth( 2 );
 
@@ -247,6 +254,12 @@ void createContext()
     Buffer sppBuffer = sutil::createOutputBuffer(context, RT_FORMAT_FLOAT, width, height, false);
     context["spp_buffer"]->set(sppBuffer);
 
+    Buffer betaBuffer = sutil::createOutputBuffer(context, RT_FORMAT_FLOAT, width, height, false);
+    context["beta_buffer"]->set(betaBuffer);
+
+    Buffer denoisedresultBuffer = sutil::createOutputBuffer(context, RT_FORMAT_FLOAT3, width, height, false);
+    context["denoised_result_buffer"]->set(denoisedresultBuffer);
+
     Buffer heatmapBuffer = sutil::createOutputBuffer(context, RT_FORMAT_FLOAT3, width, height, false);
     context["heatmap_buffer"]->set(heatmapBuffer);
     // for compiler
@@ -277,6 +290,15 @@ void createContext()
     // heat map program: 3
     context->setRayGenerationProgram(3, context->createProgramFromPTXString(hm_ptx, "get_heatmap"));
 
+    // get filter size program: 4
+    context->setRayGenerationProgram(4, context->createProgramFromPTXString(aa_ptx, "get_beta"));
+
+    // apply filter x program: 5
+    context->setRayGenerationProgram(5, context->createProgramFromPTXString(aa_ptx, "apply_filter_firstpass"));
+
+    // apply filter y program: 6
+    context->setRayGenerationProgram(6, context->createProgramFromPTXString(aa_ptx, "apply_filter_secondpass"));
+
     context[ "sqrt_num_samples" ]->setUint( sqrt_num_samples );
     context[ "bad_color"        ]->setFloat( 1000000.0f, 0.0f, 1000000.0f ); // Super magenta to make sure it doesn't get averaged out in the progressive rendering.
     context[ "bg_color"         ]->setFloat( make_float3(0.0f) );
@@ -300,6 +322,7 @@ void loadGeometry()
     float3 norm = cross(light.v1, light.v2);
     float sigma = sqrt(length(norm) / 4.0f);
     context["light_sigma"]->setFloat(sigma);
+    context["light_norm"]->setFloat(normalize(norm));
 
     Buffer light_buffer = context->createBuffer( RT_BUFFER_INPUT );
     light_buffer->setFormat( RT_FORMAT_USER );
@@ -366,12 +389,12 @@ void loadGeometry()
     setMaterial(gis.back(), diffuse, "diffuse_color", white);
 
     // Right wall
-    /*
+    
     gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 0.0f ),
                                         make_float3( 0.0f, 548.8f, 0.0f ),
                                         make_float3( 0.0f, 0.0f, 559.2f ) ) );
     setMaterial(gis.back(), diffuse, "diffuse_color", green);
-    */
+    
 
 
     // Left wall
@@ -574,23 +597,69 @@ void glutDisplay()
 
     // trace primary ray
     context->launch(2, width, height);
+
     // get distance and trace with adap spp
     context->launch(1, width, height);
 
+    // get filter size beta
+    context->launch(4, width, height);
+
+    // blur x
+    context->launch(5, width, height);
+
+    // blur y
+    context->launch(6, width, height);
+    
     //sutil::displayBufferGL( getOutputBuffer() );
     //diaplayHeatmap(context["d1_buffer"]->getBuffer(), 675.0f);
     //diaplayHeatmap(context["d2_min_buffer"]->getBuffer(), 500.0f);
     //diaplayHeatmap(context["d2_max_buffer"]->getBuffer(), 640.0f);
     //diaplayHeatmap(context["projected_dist_buffer"]->getBuffer(), 30.0f);
-    diaplayHeatmap(context["spp_buffer"]->getBuffer(), 100.0f);
-    //sutil::displayBufferGL(context["result_buffer"]->getBuffer());
+    //diaplayHeatmap(context["spp_buffer"]->getBuffer(), 100.0f);
+    //diaplayHeatmap(context["beta_buffer"]->getBuffer(), 10.0f);
+    // 
 
+
+
+    if (D1) {
+        diaplayHeatmap(context["d1_buffer"]->getBuffer(), 675.0f);
+    }
+    else if (D2MIN) {
+        diaplayHeatmap(context["d2_min_buffer"]->getBuffer(), 500.0f);
+    }
+    else if (D2MAX) {
+        diaplayHeatmap(context["d2_max_buffer"]->getBuffer(), 640.0f);
+    }
+    else if (SPP) {
+        diaplayHeatmap(context["spp_buffer"]->getBuffer(), 100.0f);
+    }
+    else if (BETA) {
+        diaplayHeatmap(context["beta_buffer"]->getBuffer(), 10.0f);
+    }
+    else if (NOISY) {
+        sutil::displayBufferGL(context["result_buffer"]->getBuffer());
+    }
+    else {
+        sutil::displayBufferGL(context["denoised_result_buffer"]->getBuffer());
+    }
+
+
+    
     {
       static unsigned frame_count = 0;
       sutil::displayFps( frame_count++ );
     }
 
     glutSwapBuffers();
+}
+
+void resetChoice()
+{
+    D1 = false;
+    D2MIN = false;
+    D2MAX = false;
+    SPP = false;
+    BETA = false;
 }
 
 
@@ -643,6 +712,43 @@ void glutKeyboardPress( unsigned char k, int x, int y )
         case('e'):
         {
             DOWN = true;
+            break;
+        }
+        // DISPLAY
+        case('n'):
+        {
+            resetChoice();
+            NOISY = (NOISY == true) ? false : true;
+            break;
+        }
+        case('1'):
+        {
+            resetChoice();
+            D1 = true;
+            break;
+        }
+        case('2'):
+        {
+            resetChoice();
+            D2MIN = true;
+            break;
+        }
+        case('3'):
+        {
+            resetChoice();
+            D2MAX = true;
+            break;
+        }
+        case('4'):
+        {
+            resetChoice();
+            SPP = true;
+            break;
+        }
+        case('5'):
+        {
+            resetChoice();
+            BETA = true;
             break;
         }
     }
