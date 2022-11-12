@@ -112,6 +112,7 @@ bool           D2MAX = false;
 bool           SPP = false;
 bool           BETA = false;
 
+float          non_adaptive_spp = 10;
 
 //------------------------------------------------------------------------------
 //
@@ -306,6 +307,7 @@ void createContext()
     // my vars
     context["img_width"]->setUint(width);
     context["img_height"]->setUint(width);
+    context["non_adaptive_spp"]->setFloat(non_adaptive_spp);
 }
 
 
@@ -317,7 +319,7 @@ void loadGeometry()
     light.v1       = make_float3( -130.0f, 0.0f, 0.0f);
     light.v2       = make_float3( 0.0f, 0.0f, 105.0f);
     light.normal   = normalize( cross(light.v1, light.v2) );
-    light.emission = make_float3( 20.0f, 20.0f, 20.0f );
+    light.emission = make_float3( 25.0f, 25.0f, 25.0f );
 
     float3 norm = cross(light.v1, light.v2);
     float sigma = sqrt(length(norm) / 4.0f);
@@ -390,10 +392,10 @@ void loadGeometry()
 
     // Right wall
     
-    gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 0.0f ),
-                                        make_float3( 0.0f, 548.8f, 0.0f ),
-                                        make_float3( 0.0f, 0.0f, 559.2f ) ) );
-    setMaterial(gis.back(), diffuse, "diffuse_color", green);
+    //gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 0.0f ),
+    //                                    make_float3( 0.0f, 548.8f, 0.0f ),
+    //                                    make_float3( 0.0f, 0.0f, 559.2f ) ) );
+    //setMaterial(gis.back(), diffuse, "diffuse_color", green);
     
 
 
@@ -589,6 +591,8 @@ void diaplayHeatmap(Buffer buffer, float estimated_max)
 
 void glutDisplay()
 {
+    context["noisy"]->setFloat(NOISY);
+
     updateCamera();
 
     // TODO
