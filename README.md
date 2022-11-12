@@ -20,7 +20,7 @@ I am currently using a GTX980Ti, which came out years ago and is not as powerful
 
 ## Interactive video
 
-https://www.youtube.com/shorts/feip5v8tPl8
+https://youtu.be/frIpJnoC-yo
 
 ## Process
 
