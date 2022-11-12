@@ -6,10 +6,10 @@ Noisy image is on the left (adaptive sampled but not filtered) and filtered is o
 
 Noisy             |  Filtered
 :-------------------------:|:-------------------------:
-![cornell_noisy](https://user-images.githubusercontent.com/49463679/201291163-2e68f65f-436f-44fe-8214-d2dfe6cdef7b.PNG)  |  ![cornell_denoised](https://user-images.githubusercontent.com/49463679/201291173-b468229c-cdbf-40f4-98fa-ffbfbee0e5d5.PNG)
-![detail_noisy](https://user-images.githubusercontent.com/49463679/201291656-2638a8f6-6d3d-42ce-9a8b-b62761ec20b7.PNG)  |  ![detail_denoised](https://user-images.githubusercontent.com/49463679/201291663-a31006f3-e3c3-417a-a065-da435d5c469f.PNG)
-![detail2_noisy](https://user-images.githubusercontent.com/49463679/201291689-1082a9d9-b9c2-4e1d-9f8d-d7809413e5ac.PNG) | ![detail2_denoised](https://user-images.githubusercontent.com/49463679/201291693-eb102f47-5604-4b84-b488-de4c436933a3.PNG)
-![detail3_noisy](https://user-images.githubusercontent.com/49463679/201291703-c9f6c292-e3f6-4775-aa7f-da470e87f61e.PNG) | ![detail3_denoised](https://user-images.githubusercontent.com/49463679/201291705-acb700c3-be65-4132-8779-aa64f427506e.PNG)
+![cornell_noisy](https://user-images.githubusercontent.com/49463679/201491993-5730a5d2-913e-478d-a4f4-d6c3a2362aaa.PNG) | ![cornell_denoised](https://user-images.githubusercontent.com/49463679/201492007-9254258e-63e1-434e-8e5a-6c16d08629bc.PNG)
+![detail1_noisy](https://user-images.githubusercontent.com/49463679/201492012-200effd7-43c0-4fa5-a644-42222bdbe52c.PNG) | ![detail1_denoised](https://user-images.githubusercontent.com/49463679/201492015-7f0073ef-2a7b-4507-b6fb-4badd0c0a584.PNG)
+![detail3_noisy](https://user-images.githubusercontent.com/49463679/201492021-23651bf5-452f-4b30-a4f1-9ae58dde935c.PNG) | ![detail3_denoised](https://user-images.githubusercontent.com/49463679/201492024-4124f624-1b92-4d51-9b43-d475f28e708f.PNG)
+![detail2_noisy](https://user-images.githubusercontent.com/49463679/201492034-9dc25757-70e1-40ce-b4dc-c2049c853fa2.PNG) | ![detail2_denoised](https://user-images.githubusercontent.com/49463679/201492036-4550ff56-a112-4c46-a34f-7b52de445d10.PNG)
 
 The image below show some sort of "firefly"-like artifacts that I been trying to get rid off, but have not succeeded yet.\
 Also the filter will blur different objects together, so I need to implement methods to mitigate this.
