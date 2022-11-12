@@ -18,6 +18,10 @@ Also the filter will blur different objects together, so I need to implement met
 Also I would try to find things to optimize in order to get the best framerate.\
 I am currently using a GTX980Ti, which came out years ago and is not as powerful now. I am getting 15~30fps on the cornell box scene.
 
+## Interactive video
+
+https://www.youtube.com/shorts/feip5v8tPl8
+
 ## Process
 
 Here are the different variables I got visualized
