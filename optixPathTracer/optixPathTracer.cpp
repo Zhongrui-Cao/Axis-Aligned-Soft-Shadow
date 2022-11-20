@@ -80,6 +80,8 @@ int            rr_begin_depth = 1;
 Program        pgram_intersection = 0;
 Program        pgram_bounding_box = 0;
 
+uint           objectID = 0;
+
 // Camera state
 float3         camera_up;
 float3         camera_lookat;
@@ -111,8 +113,9 @@ bool           D2MIN = false;
 bool           D2MAX = false;
 bool           SPP = false;
 bool           BETA = false;
+bool           OBJID = false;
 
-float          non_adaptive_spp = 10;
+float          non_adaptive_spp = 500;
 
 //------------------------------------------------------------------------------
 //
@@ -187,6 +190,8 @@ GeometryInstance createParallelogram(
         const float3& offset1,
         const float3& offset2)
 {
+    objectID++;
+
     Geometry parallelogram = context->createGeometry();
     parallelogram->setPrimitiveCount( 1u );
     parallelogram->setIntersectionProgram( pgram_intersection );
@@ -206,6 +211,7 @@ GeometryInstance createParallelogram(
 
     GeometryInstance gi = context->createGeometryInstance();
     gi->setGeometry(parallelogram);
+    gi["object_id"]->setUint(objectID);
     return gi;
 }
 
@@ -621,33 +627,40 @@ void glutDisplay()
     //diaplayHeatmap(context["projected_dist_buffer"]->getBuffer(), 30.0f);
     //diaplayHeatmap(context["spp_buffer"]->getBuffer(), 100.0f);
     //diaplayHeatmap(context["beta_buffer"]->getBuffer(), 10.0f);
-    // 
-
-
-
+    // sutil::displayText(strings[i].c_str(), width - 150, 55);
+    
     if (D1) {
         diaplayHeatmap(context["d1_buffer"]->getBuffer(), 675.0f);
+        sutil::displayText("d1_buffer", width - 150, height - 50);
     }
     else if (D2MIN) {
         diaplayHeatmap(context["d2_min_buffer"]->getBuffer(), 500.0f);
+        sutil::displayText("d2_min_buffer", width - 150, height - 50);
     }
     else if (D2MAX) {
         diaplayHeatmap(context["d2_max_buffer"]->getBuffer(), 640.0f);
+        sutil::displayText("d2_max_buffer", width - 150, height - 50);
     }
     else if (SPP) {
         diaplayHeatmap(context["spp_buffer"]->getBuffer(), 100.0f);
+        sutil::displayText("spp_buffer", width - 150, height - 50);
     }
     else if (BETA) {
         diaplayHeatmap(context["beta_buffer"]->getBuffer(), 10.0f);
+        sutil::displayText("beta_buffer", width - 150, height - 50);
+    }
+    else if (OBJID) {
+        diaplayHeatmap(context["object_id_buffer"]->getBuffer(), 15.f);
+        sutil::displayText("object_id_buffer", width - 150, height - 50);
     }
     else if (NOISY) {
         sutil::displayBufferGL(context["result_buffer"]->getBuffer());
+        sutil::displayText("Noisy non addaptive", width - 150, height - 50);
     }
     else {
         sutil::displayBufferGL(context["denoised_result_buffer"]->getBuffer());
+        sutil::displayText("Denoised result", width - 150, height - 50);
     }
-
-
     
     {
       static unsigned frame_count = 0;
@@ -664,6 +677,7 @@ void resetChoice()
     D2MAX = false;
     SPP = false;
     BETA = false;
+    OBJID = false;
 }
 
 
@@ -753,6 +767,12 @@ void glutKeyboardPress( unsigned char k, int x, int y )
         {
             resetChoice();
             BETA = true;
+            break;
+        }
+        case('6'):
+        {
+            resetChoice();
+            OBJID = true;
             break;
         }
     }
