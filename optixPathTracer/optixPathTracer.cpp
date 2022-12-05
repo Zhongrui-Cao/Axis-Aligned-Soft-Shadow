@@ -50,6 +50,7 @@
 #include "optixPathTracer.h"
 #include <sutil.h>
 #include <Arcball.h>
+#include <OptiXMesh.h>
 
 #include <algorithm>
 #include <cstring>
@@ -70,8 +71,8 @@ const char* const SAMPLE_NAME = "optixPathTracer";
 //------------------------------------------------------------------------------
 
 Context        context = 0;
-uint32_t       width  = 1000;
-uint32_t       height = 1000;
+uint32_t       width  = 800;
+uint32_t       height = 800;
 bool           use_pbo = true;
 
 int            frame_number = 1;
@@ -114,6 +115,7 @@ bool           D2MAX = false;
 bool           SPP = false;
 bool           BETA = false;
 bool           OBJID = false;
+bool           GROUND = false;
 
 float          non_adaptive_spp = 500;
 
@@ -130,6 +132,7 @@ void createContext();
 void loadGeometry();
 void setupCamera();
 void updateCamera();
+void updateScene();
 void glutInitialize( int* argc, char** argv );
 void glutRun();
 
@@ -308,7 +311,7 @@ void createContext()
 
     context[ "sqrt_num_samples" ]->setUint( sqrt_num_samples );
     context[ "bad_color"        ]->setFloat( 1000000.0f, 0.0f, 1000000.0f ); // Super magenta to make sure it doesn't get averaged out in the progressive rendering.
-    context[ "bg_color"         ]->setFloat( make_float3(0.0f) );
+    context[ "bg_color"         ]->setFloat( 0.0f, 0.0f, 0.0f );
 
     // my vars
     context["img_width"]->setUint(width);
@@ -316,6 +319,21 @@ void createContext()
     context["non_adaptive_spp"]->setFloat(non_adaptive_spp);
 }
 
+GeometryInstance loadMesh(const std::string& filename, Material material, const float3 color, const Matrix4x4& mat)
+{
+    OptiXMesh mesh;
+    mesh.context = context;
+    mesh.use_tri_api = false;
+    mesh.ignore_mats = false;
+    mesh.material = material;
+    loadMesh(filename, mesh, mat);
+
+    GeometryInstance gi = mesh.geom_instance;
+    gi["object_id"]->setUint(++objectID);
+    //gi->addMaterial(material);
+    gi["diffuse_color"]->setFloat(color);
+    return gi;
+}
 
 void loadGeometry()
 {
@@ -350,7 +368,7 @@ void loadGeometry()
     diffuse->setClosestHitProgram( 0, diffuse_ch );
     diffuse->setAnyHitProgram( 1, diffuse_ah );
     */
-    const char* ptx = sutil::getPtxString(SAMPLE_NAME, "optixPathTracer.cu");
+    //const char* ptx = sutil::getPtxString(SAMPLE_NAME, "optixPathTracer.cu");
     const char* ptx_aa = sutil::getPtxString(SAMPLE_NAME, "AA.cu");
 
     Program diffuse_ch = context->createProgramFromPTXString(ptx_aa, "geometry_hit");
@@ -363,115 +381,182 @@ void loadGeometry()
     diffuse_light->setClosestHitProgram( 0, diffuse_em );
 
     // Set up parallelogram programs
-    ptx = sutil::getPtxString( SAMPLE_NAME, "parallelogram.cu" );
-    pgram_bounding_box = context->createProgramFromPTXString( ptx, "bounds" );
-    pgram_intersection = context->createProgramFromPTXString( ptx, "intersect" );
+    ptx_aa = sutil::getPtxString( SAMPLE_NAME, "parallelogram.cu" );
+    pgram_bounding_box = context->createProgramFromPTXString(ptx_aa, "bounds" );
+    pgram_intersection = context->createProgramFromPTXString(ptx_aa, "intersect" );
 
-    // create geometry instances
+
+    // cornell box
+    /*
     {
 
-    // create geometry instances
-    std::vector<GeometryInstance> gis;
+        // create geometry instances
+        std::vector<GeometryInstance> gis;
 
-    const float3 white = make_float3( 0.8f, 0.8f, 0.8f );
-    const float3 green = make_float3( 0.05f, 0.8f, 0.05f );
-    const float3 red   = make_float3( 0.8f, 0.05f, 0.05f );
-    const float3 light_em = make_float3( 15.0f, 15.0f, 5.0f );
+        const float3 white = make_float3(0.8f, 0.8f, 0.8f);
+        const float3 green = make_float3(0.05f, 0.8f, 0.05f);
+        const float3 red = make_float3(0.8f, 0.05f, 0.05f);
+        const float3 light_em = make_float3(15.0f, 15.0f, 5.0f);
 
-    // Floor
-    gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 0.0f ),
-                                        make_float3( 0.0f, 0.0f, 559.2f ),
-                                        make_float3( 556.0f, 0.0f, 0.0f ) ) );
-    setMaterial(gis.back(), diffuse, "diffuse_color", white);
+        // Floor
+        gis.push_back(createParallelogram(make_float3(0.0f, 0.0f, 0.0f),
+            make_float3(0.0f, 0.0f, 559.2f),
+            make_float3(556.0f, 0.0f, 0.0f)));
+        setMaterial(gis.back(), diffuse, "diffuse_color", white);
 
-    // Ceiling
-    gis.push_back( createParallelogram( make_float3( 0.0f, 548.8f, 0.0f ),
-                                        make_float3( 556.0f, 0.0f, 0.0f ),
-                                        make_float3( 0.0f, 0.0f, 559.2f ) ) );
-    setMaterial(gis.back(), diffuse, "diffuse_color", white);
+        // Ceiling
+        gis.push_back(createParallelogram(make_float3(0.0f, 548.8f, 0.0f),
+            make_float3(556.0f, 0.0f, 0.0f),
+            make_float3(0.0f, 0.0f, 559.2f)));
+        setMaterial(gis.back(), diffuse, "diffuse_color", white);
 
-    // Back wall
-    gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 559.2f),
-                                        make_float3( 0.0f, 548.8f, 0.0f),
-                                        make_float3( 556.0f, 0.0f, 0.0f) ) );
-    setMaterial(gis.back(), diffuse, "diffuse_color", white);
+        // Back wall
+        gis.push_back(createParallelogram(make_float3(0.0f, 0.0f, 559.2f),
+            make_float3(0.0f, 548.8f, 0.0f),
+            make_float3(556.0f, 0.0f, 0.0f)));
+        setMaterial(gis.back(), diffuse, "diffuse_color", white);
 
-    // Right wall
-    
-    //gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 0.0f ),
-    //                                    make_float3( 0.0f, 548.8f, 0.0f ),
-    //                                    make_float3( 0.0f, 0.0f, 559.2f ) ) );
-    //setMaterial(gis.back(), diffuse, "diffuse_color", green);
-    
+        // Right wall
 
+        gis.push_back(createParallelogram(make_float3(0.0f, 0.0f, 0.0f),
+            make_float3(0.0f, 548.8f, 0.0f),
+            make_float3(0.0f, 0.0f, 559.2f)));
+        setMaterial(gis.back(), diffuse, "diffuse_color", green);
 
-    // Left wall
-    gis.push_back( createParallelogram( make_float3( 556.0f, 0.0f, 0.0f ),
-                                        make_float3( 0.0f, 0.0f, 559.2f ),
-                                        make_float3( 0.0f, 548.8f, 0.0f ) ) );
-    setMaterial(gis.back(), diffuse, "diffuse_color", red);
+        // Left wall
+        gis.push_back(createParallelogram(make_float3(556.0f, 0.0f, 0.0f),
+            make_float3(0.0f, 0.0f, 559.2f),
+            make_float3(0.0f, 548.8f, 0.0f)));
+        setMaterial(gis.back(), diffuse, "diffuse_color", red);
 
-    // Short block
-    gis.push_back( createParallelogram( make_float3( 130.0f, 165.0f, 65.0f),
-                                        make_float3( -48.0f, 0.0f, 160.0f),
-                                        make_float3( 160.0f, 0.0f, 49.0f) ) );
-    setMaterial(gis.back(), diffuse, "diffuse_color", white);
-    gis.push_back( createParallelogram( make_float3( 290.0f, 0.0f, 114.0f),
-                                        make_float3( 0.0f, 165.0f, 0.0f),
-                                        make_float3( -50.0f, 0.0f, 158.0f) ) );
-    setMaterial(gis.back(), diffuse, "diffuse_color", white);
-    gis.push_back( createParallelogram( make_float3( 130.0f, 0.0f, 65.0f),
-                                        make_float3( 0.0f, 165.0f, 0.0f),
-                                        make_float3( 160.0f, 0.0f, 49.0f) ) );
-    setMaterial(gis.back(), diffuse, "diffuse_color", white);
-    gis.push_back( createParallelogram( make_float3( 82.0f, 0.0f, 225.0f),
-                                        make_float3( 0.0f, 165.0f, 0.0f),
-                                        make_float3( 48.0f, 0.0f, -160.0f) ) );
-    setMaterial(gis.back(), diffuse, "diffuse_color", white);
-    gis.push_back( createParallelogram( make_float3( 240.0f, 0.0f, 272.0f),
-                                        make_float3( 0.0f, 165.0f, 0.0f),
-                                        make_float3( -158.0f, 0.0f, -47.0f) ) );
-    setMaterial(gis.back(), diffuse, "diffuse_color", white);
+        // Short block
+        gis.push_back(createParallelogram(make_float3(130.0f, 165.0f, 65.0f),
+            make_float3(-48.0f, 0.0f, 160.0f),
+            make_float3(160.0f, 0.0f, 49.0f)));
+        setMaterial(gis.back(), diffuse, "diffuse_color", white);
+        gis.push_back(createParallelogram(make_float3(290.0f, 0.0f, 114.0f),
+            make_float3(0.0f, 165.0f, 0.0f),
+            make_float3(-50.0f, 0.0f, 158.0f)));
+        setMaterial(gis.back(), diffuse, "diffuse_color", white);
+        gis.push_back(createParallelogram(make_float3(130.0f, 0.0f, 65.0f),
+            make_float3(0.0f, 165.0f, 0.0f),
+            make_float3(160.0f, 0.0f, 49.0f)));
+        setMaterial(gis.back(), diffuse, "diffuse_color", white);
+        gis.push_back(createParallelogram(make_float3(82.0f, 0.0f, 225.0f),
+            make_float3(0.0f, 165.0f, 0.0f),
+            make_float3(48.0f, 0.0f, -160.0f)));
+        setMaterial(gis.back(), diffuse, "diffuse_color", white);
+        gis.push_back(createParallelogram(make_float3(240.0f, 0.0f, 272.0f),
+            make_float3(0.0f, 165.0f, 0.0f),
+            make_float3(-158.0f, 0.0f, -47.0f)));
+        setMaterial(gis.back(), diffuse, "diffuse_color", white);
 
-    // Tall block
-    gis.push_back( createParallelogram( make_float3( 423.0f, 330.0f, 247.0f),
-                                        make_float3( -158.0f, 0.0f, 49.0f),
-                                        make_float3( 49.0f, 0.0f, 159.0f) ) );
-    setMaterial(gis.back(), diffuse, "diffuse_color", white);
-    gis.push_back( createParallelogram( make_float3( 423.0f, 0.0f, 247.0f),
-                                        make_float3( 0.0f, 330.0f, 0.0f),
-                                        make_float3( 49.0f, 0.0f, 159.0f) ) );
-    setMaterial(gis.back(), diffuse, "diffuse_color", white);
-    gis.push_back( createParallelogram( make_float3( 472.0f, 0.0f, 406.0f),
-                                        make_float3( 0.0f, 330.0f, 0.0f),
-                                        make_float3( -158.0f, 0.0f, 50.0f) ) );
-    setMaterial(gis.back(), diffuse, "diffuse_color", white);
-    gis.push_back( createParallelogram( make_float3( 314.0f, 0.0f, 456.0f),
-                                        make_float3( 0.0f, 330.0f, 0.0f),
-                                        make_float3( -49.0f, 0.0f, -160.0f) ) );
-    setMaterial(gis.back(), diffuse, "diffuse_color", white);
-    gis.push_back( createParallelogram( make_float3( 265.0f, 0.0f, 296.0f),
-                                        make_float3( 0.0f, 330.0f, 0.0f),
-                                        make_float3( 158.0f, 0.0f, -49.0f) ) );
-    setMaterial(gis.back(), diffuse, "diffuse_color", white);
+        // Tall block
+        gis.push_back(createParallelogram(make_float3(423.0f, 330.0f, 247.0f),
+            make_float3(-158.0f, 0.0f, 49.0f),
+            make_float3(49.0f, 0.0f, 159.0f)));
+        setMaterial(gis.back(), diffuse, "diffuse_color", white);
+        gis.push_back(createParallelogram(make_float3(423.0f, 0.0f, 247.0f),
+            make_float3(0.0f, 330.0f, 0.0f),
+            make_float3(49.0f, 0.0f, 159.0f)));
+        setMaterial(gis.back(), diffuse, "diffuse_color", white);
+        gis.push_back(createParallelogram(make_float3(472.0f, 0.0f, 406.0f),
+            make_float3(0.0f, 330.0f, 0.0f),
+            make_float3(-158.0f, 0.0f, 50.0f)));
+        setMaterial(gis.back(), diffuse, "diffuse_color", white);
+        gis.push_back(createParallelogram(make_float3(314.0f, 0.0f, 456.0f),
+            make_float3(0.0f, 330.0f, 0.0f),
+            make_float3(-49.0f, 0.0f, -160.0f)));
+        setMaterial(gis.back(), diffuse, "diffuse_color", white);
+        gis.push_back(createParallelogram(make_float3(265.0f, 0.0f, 296.0f),
+            make_float3(0.0f, 330.0f, 0.0f),
+            make_float3(158.0f, 0.0f, -49.0f)));
+        setMaterial(gis.back(), diffuse, "diffuse_color", white);
 
-    // Create shadow group (no light)
-    GeometryGroup shadow_group = context->createGeometryGroup(gis.begin(), gis.end());
-    shadow_group->setAcceleration( context->createAcceleration( "Trbvh" ) );
-    context["top_shadower"]->set( shadow_group );
+        // Create shadow group (no light)
+        GeometryGroup shadow_group = context->createGeometryGroup(gis.begin(), gis.end());
+        shadow_group->setAcceleration(context->createAcceleration("Trbvh"));
+        context["top_shadower"]->set(shadow_group);
 
-    // Light
-    gis.push_back( createParallelogram( make_float3( 343.0f, 548.6f, 227.0f),
-                                        make_float3( -130.0f, 0.0f, 0.0f),
-                                        make_float3( 0.0f, 0.0f, 105.0f) ) );
-    setMaterial(gis.back(), diffuse_light, "emission_color", light_em);
+        // Light
+        gis.push_back(createParallelogram(make_float3(343.0f, 548.6f, 227.0f),
+            make_float3(-130.0f, 0.0f, 0.0f),
+            make_float3(0.0f, 0.0f, 105.0f)));
+        setMaterial(gis.back(), diffuse_light, "emission_color", light_em);
 
-    // Create geometry group
-    GeometryGroup geometry_group = context->createGeometryGroup(gis.begin(), gis.end());
-    geometry_group->setAcceleration( context->createAcceleration( "Trbvh" ) );
-    context["top_object"]->set( geometry_group );
+        // Create geometry group
+        GeometryGroup geometry_group = context->createGeometryGroup(gis.begin(), gis.end());
+        geometry_group->setAcceleration(context->createAcceleration("Trbvh"));
+        context["top_object"]->set(geometry_group);
 
     }
+    */
+
+
+/**/
+
+    // grid
+
+        // create geometry instances
+        std::vector<GeometryInstance> gis;
+
+        const float3 white = make_float3(0.8f, 0.8f, 0.8f);
+        const float3 green = make_float3(0.05f, 0.8f, 0.05f);
+        const float3 red = make_float3(0.8f, 0.05f, 0.05f);
+        const float3 light_em = make_float3(15.0f, 15.0f, 5.0f);
+
+        // Floor
+        gis.push_back(createParallelogram(make_float3(-2000.0f, 0.0f, -2000.0f),
+            make_float3(0.0f, 0.0f, 4000.0f),
+            make_float3(4000.0f, 0.0f, 0.0f)));
+        setMaterial(gis.back(), diffuse, "diffuse_color", white);
+
+        Matrix4x4 transform;
+        transform = Matrix4x4::translate(make_float3(500, 90, 500));
+        transform *= Matrix4x4::scale(make_float3(60, 60, 60));
+        transform *= Matrix4x4::rotate(40, make_float3(1.0f, 0.0f, 0.0f));
+        transform *= Matrix4x4::rotate(40, make_float3(0.0f, 1.0f, 0.0f));
+
+        // Grid
+        gis.push_back(loadMesh("I:/Axis-Aligned-Soft-Shadow/data/grid3.obj", diffuse, green, transform));
+
+        Matrix4x4 transformcow;
+        transformcow = Matrix4x4::translate(make_float3(300, 50, 0));
+        transformcow *= Matrix4x4::scale(make_float3(2000, 2000, 2000));
+        transformcow *= Matrix4x4::rotate(0, make_float3(0.0f, 0.0f, 1.0f));
+
+        gis.push_back(loadMesh("I:/Axis-Aligned-Soft-Shadow/data/cow.obj", diffuse, white, transformcow));
+
+        transform = Matrix4x4::translate(make_float3(100, 90, 500));
+        transform *= Matrix4x4::scale(make_float3(60, 60, 60));
+        transform *= Matrix4x4::rotate(50, make_float3(0.0f, 1.0f, 0.0f));
+        transform *= Matrix4x4::rotate(40, make_float3(1.0f, 0.0f, 0.0f));
+
+        // Grid
+        gis.push_back(loadMesh("I:/Axis-Aligned-Soft-Shadow/data/grid2.obj", diffuse, red, transform));
+
+        // Create shadow group (no light)
+        //GeometryGroup shadow_group = context->createGeometryGroup(gis.begin(), gis.end());
+        //shadow_group->setAcceleration(context->createAcceleration("Trbvh"));
+        //context["top_shadower"]->set(shadow_group);
+
+        //// Light
+        gis.push_back(createParallelogram(make_float3(343.0f, 548.6f, 227.0f),
+            make_float3(-130.0f, 0.0f, 0.0f),
+            make_float3(0.0f, 0.0f, 105.0f)));
+        setMaterial(gis.back(), diffuse_light, "emission_color", light_em);
+
+        // Create geometry group
+        GeometryGroup geometry_group = context->createGeometryGroup(gis.begin(), gis.end());
+        geometry_group->setAcceleration(context->createAcceleration("Trbvh"));
+        context["top_object"]->set(geometry_group);
+        
+
+
+}
+
+void updateScene() {
+
 }
 
   
@@ -598,8 +683,11 @@ void diaplayHeatmap(Buffer buffer, float estimated_max)
 void glutDisplay()
 {
     context["noisy"]->setFloat(NOISY);
+    context["ground"]->setFloat(GROUND);
 
     updateCamera();
+
+    updateScene();
 
     // TODO
     // reference ground truth, not working for some reason??????
@@ -630,11 +718,11 @@ void glutDisplay()
     // sutil::displayText(strings[i].c_str(), width - 150, 55);
     
     if (D1) {
-        diaplayHeatmap(context["d1_buffer"]->getBuffer(), 675.0f);
+        diaplayHeatmap(context["d1_buffer"]->getBuffer(), 800.0f);
         sutil::displayText("d1_buffer", width - 150, height - 50);
     }
     else if (D2MIN) {
-        diaplayHeatmap(context["d2_min_buffer"]->getBuffer(), 500.0f);
+        diaplayHeatmap(context["d2_min_buffer"]->getBuffer(), 700.0f);
         sutil::displayText("d2_min_buffer", width - 150, height - 50);
     }
     else if (D2MAX) {
@@ -642,20 +730,24 @@ void glutDisplay()
         sutil::displayText("d2_max_buffer", width - 150, height - 50);
     }
     else if (SPP) {
-        diaplayHeatmap(context["spp_buffer"]->getBuffer(), 100.0f);
+        diaplayHeatmap(context["spp_buffer"]->getBuffer(), 80.0f);
         sutil::displayText("spp_buffer", width - 150, height - 50);
     }
     else if (BETA) {
-        diaplayHeatmap(context["beta_buffer"]->getBuffer(), 10.0f);
+        diaplayHeatmap(context["beta_buffer"]->getBuffer(), 4.0f);
         sutil::displayText("beta_buffer", width - 150, height - 50);
     }
     else if (OBJID) {
-        diaplayHeatmap(context["object_id_buffer"]->getBuffer(), 15.f);
+        diaplayHeatmap(context["object_id_buffer"]->getBuffer(), 5.f);
         sutil::displayText("object_id_buffer", width - 150, height - 50);
     }
     else if (NOISY) {
         sutil::displayBufferGL(context["result_buffer"]->getBuffer());
         sutil::displayText("Noisy non addaptive", width - 150, height - 50);
+    }
+    else if (GROUND) {
+        sutil::displayBufferGL(context["result_buffer"]->getBuffer());
+        sutil::displayText("GroundTruth spp500", width - 150, height - 50);
     }
     else {
         sutil::displayBufferGL(context["denoised_result_buffer"]->getBuffer());
@@ -678,6 +770,7 @@ void resetChoice()
     SPP = false;
     BETA = false;
     OBJID = false;
+    GROUND = false;
 }
 
 
@@ -737,6 +830,12 @@ void glutKeyboardPress( unsigned char k, int x, int y )
         {
             resetChoice();
             NOISY = (NOISY == true) ? false : true;
+            break;
+        }
+        case('g'):
+        {
+            resetChoice();
+            GROUND = true;
             break;
         }
         case('1'):
