@@ -58,3 +58,20 @@ result | spp | beta
 
 Notice for the feet of the cow, we shoot more samples and filter less. But for the shadow of the head, we sample much less but filter more aggresively.
 
+### Step 4: Image space blur
+
+Finally, I apply the gaussian blur on the noisy output. Given by this formula: ![gaussian](https://user-images.githubusercontent.com/49463679/206050238-7e7f7bb8-6c35-4e7a-901d-aec7be537529.PNG).\
+I utilize the world-space distances between objects to compute the filter weights in this equation using a depth buffer.\
+Also to get greater efficiency, I use two 1D separable filters along the image dimension. We can rewrite the equation as: w(xij − xkl) = w(xij − xkj )w(xkj − xkl).\
+Since beta varies slowly in practice, there is no observable difference between 2d filter and two 1d filters.\
+
+noisy | filtered
+:-------------------------:|:-------------------------:
+![noisy](https://user-images.githubusercontent.com/49463679/206051055-892519d4-7ae6-470d-b3df-6f36549d7d43.png) | ![filtered](https://user-images.githubusercontent.com/49463679/206051061-54a1d96f-7683-4b78-a59f-e107091579f4.png)
+
+Furthermore, I used a per-pixel object ID check to avoid filtering different objects or regions.\
+This image shows different objects with different color corresponding to their ID.
+
+<img src="https://user-images.githubusercontent.com/49463679/206051330-129ce7c1-18a8-4f2c-b1c6-40e08f5c078a.png" width=40% height=40%>
+
+
