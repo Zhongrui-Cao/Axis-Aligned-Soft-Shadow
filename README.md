@@ -1,26 +1,23 @@
-# Axis-Aligned Soft Shadow project milestone 2
+# Axis-Aligned Soft Shadow project report
 
-## Current results
-Here are some of the results of my denoiser right now\
-Noisy image is on the left (adaptive sampled but not filtered) and filtered is on the right
+## Overview
 
-Noisy             |  Filtered
-:-------------------------:|:-------------------------:
-![cornell_noisy](https://user-images.githubusercontent.com/49463679/201491993-5730a5d2-913e-478d-a4f4-d6c3a2362aaa.PNG) | ![cornell_denoised](https://user-images.githubusercontent.com/49463679/201492007-9254258e-63e1-434e-8e5a-6c16d08629bc.PNG)
-![detail1_noisy](https://user-images.githubusercontent.com/49463679/201492012-200effd7-43c0-4fa5-a644-42222bdbe52c.PNG) | ![detail1_denoised](https://user-images.githubusercontent.com/49463679/201492015-7f0073ef-2a7b-4507-b6fb-4badd0c0a584.PNG)
-![detail3_noisy](https://user-images.githubusercontent.com/49463679/201492021-23651bf5-452f-4b30-a4f1-9ae58dde935c.PNG) | ![detail3_denoised](https://user-images.githubusercontent.com/49463679/201492024-4124f624-1b92-4d51-9b43-d475f28e708f.PNG)
-![detail2_noisy](https://user-images.githubusercontent.com/49463679/201492034-9dc25757-70e1-40ce-b4dc-c2049c853fa2.PNG) | ![detail2_denoised](https://user-images.githubusercontent.com/49463679/201492036-4550ff56-a112-4c46-a34f-7b52de445d10.PNG)
+![overview](https://user-images.githubusercontent.com/49463679/206032840-b5613582-a180-40e0-88e6-feea1a05fad3.png)
 
-The image below show some sort of "firefly"-like artifacts that I been trying to get rid off, but have not succeeded yet.\
-Also the filter will blur different objects together, so I need to implement methods to mitigate this.
-![artifact](https://user-images.githubusercontent.com/49463679/201292408-8b29142f-0876-4329-831c-165ed9fd91c9.PNG)
+My project is an implementation of the paper [*Axis-Aligned Filtering for Interactive Sampled Soft Shadows*](http://graphics.berkeley.edu/papers/UdayMehta-AAF-2012-12/) by Mehta Et al. This paper focuses on rendering real-time Monte Carlo ray traced soft shadows by using Axis-Aligned Filtering. More specifically, it is acheived by doing frequency analysis on the Fourier spectrum of the occlusion function. Using this analysis, we can apply adaptive sampling and finally filtering to acheive real time soft shadows that converge to the ground truth. 
 
-Also I would try to find things to optimize in order to get the best framerate.\
-I am currently using a GTX980Ti, which came out years ago and is not as powerful now. I am getting 15~30fps on the cornell box scene.
+## Theory
+
+![Occlusion_Spectrum_Figure](https://user-images.githubusercontent.com/49463679/206034604-61f6bef5-11cf-4183-a62c-607e2761f5bc.png)
+
+The occulsion function and its spectrum is given in this graph. Given a planer area light source, we sample the distance from the receiver to the light source d1. Then we sample the min and max distances from the occluder to the light source, d2min and d2max. Using this information we are given the 2-d occlusion function shown in (b) and the Fourier transform of this funcion shown in (c). 
+
+![aa-vs-shear](https://user-images.githubusercontent.com/49463679/206036060-212fb8af-1d76-428a-98ae-42515e214b48.PNG)
+
+The occlusion function is confined in a double-wedge with slopes s1 and s2. By applying the axis-aligned filter shown in (a) above, we can substantially reduce the number of samples needed for a bias free reconstruction. We can sample more but filter less in high-frequency regions of the shadow, and sample less and filter more in low-frequency regions. This approch is much faster than the sheared filter shown in (b), which requires irregular search over the light field and introduces minutes of overhead. Axis-aligned filtering adds minimal overhead (<5ms).
 
 ## Interactive video
 
-https://youtu.be/frIpJnoC-yo
 
 ## Process
 
@@ -33,11 +30,3 @@ d1 | d2max
 spp | beta
 :-------------------------:|:-------------------------:
 ![spp](https://user-images.githubusercontent.com/49463679/201293838-d48699a6-5348-42db-b2c1-575410dc37b7.PNG) | ![beta](https://user-images.githubusercontent.com/49463679/201293885-0313b83c-aa93-41b7-8bc6-dd5a764dd7a4.PNG)
-
-## future plan
-
-1. debug the artifacts on the filter
-2. test out different parameters for best results
-3. implement scene loader to get more complex scene and objects
-4. implement animation to demonstrate real-time shadow changes.
-5. Is there anything else I could explore?
