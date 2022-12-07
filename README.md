@@ -74,4 +74,58 @@ This image shows different objects with different color corresponding to their I
 
 <img src="https://user-images.githubusercontent.com/49463679/206051330-129ce7c1-18a8-4f2c-b1c6-40e08f5c078a.png" width=40% height=40%>
 
+## Results
 
+I am running my implementation on a GTX980Ti graphics card. I am getting 15-30 fps on simple scenes, and 10-15 fps on more complex geometries.\
+My results are virtually noise free, and much faster than the ground truth, which is 1-5 fps on most scenes.\
+Here are some results on different scenes.
+
+### Grids Scene
+noisy | denoised | ground truth
+:-------------------------:|:-------------------------:|:-------------------------:
+![noisy_grid](https://user-images.githubusercontent.com/49463679/206053665-827b9399-9885-48db-828f-cf42f5e90d98.png) | ![denoised_grid](https://user-images.githubusercontent.com/49463679/206053691-bc43cea0-6df7-4ced-bce2-d08fe9094332.png) | ![gt_grid](https://user-images.githubusercontent.com/49463679/206053735-d676ba84-1c1d-4c14-81d9-345ed0d23bc4.png)
+
+#### Noisy visibility VS. Denoised result
+![noisy_vs_denoised](https://user-images.githubusercontent.com/49463679/206054187-697bf921-78f9-488b-87ad-812d4e6f8896.png)\
+The sampling and filtering provides so much better result while staying around the same fps as noisy.
+
+#### Ground truth VS. Denoised result
+![gt_vs_denoised](https://user-images.githubusercontent.com/49463679/206054029-144b358e-87a5-4c03-981a-eb49d7fd10b8.png)\
+Ground truth is on left, denoised on the right. Virtually indistinguishable, while ground truth is not interactive (5 fps).
+
+#### Diff images
+Here's noisy and denoised difference from the ground truth. The diffent pixels are highlighted in purple.
+noisy | denoised
+:-------------------------:|:-------------------------:
+![noisy_diff](https://user-images.githubusercontent.com/49463679/206055051-81f5af90-bc5a-465d-9d00-eaf3fbb148f0.png) | ![denoised_diff](https://user-images.githubusercontent.com/49463679/206055072-562298ba-3520-4bc0-be5b-4e03c3c757b6.png)
+
+The denoised result is virtually no difference from ground truth.
+
+### Cow
+noisy | denoised | ground truth
+:-------------------------:|:-------------------------:|:-------------------------:
+![cow_noisy](https://user-images.githubusercontent.com/49463679/206056254-24c02794-53e9-441b-aefc-0f33fa51dc9b.png) | ![cow_denoised](https://user-images.githubusercontent.com/49463679/206056265-34e1fa45-474f-40fd-a029-d3f3b1043ce7.png) | ![cow_gt](https://user-images.githubusercontent.com/49463679/206056275-0e9ad1fb-a196-4fd7-afe2-29bdb129b538.png)
+
+#### Noisy visibility VS. Denoised result
+![cow_noisy_vs_denoised](https://user-images.githubusercontent.com/49463679/206056342-7b5f9e00-14da-4781-b880-98142a9a32e9.png)\
+For the cow object, the denoised fps is at ~15fps.
+
+#### Ground truth VS. Denoised result
+![cow_gt_vs_denoised](https://user-images.githubusercontent.com/49463679/206056423-d2ed6c5d-24c4-4f38-9e8a-c73b1e001516.png)\
+Ground truth is on the left and denoised result on the right.\
+The ground truth for the cow object is bearly interative at 1-2 fps. The denoised result provides interative fps while having no visible difference to ground truth.
+
+#### Diff images
+Here's noisy and denoised difference from the ground truth, this is the enlarged detail of the cow's head. The diffent pixels are highlighted in purple.
+noisy | denoised
+:-------------------------:|:-------------------------:
+![cow_noisy_diff](https://user-images.githubusercontent.com/49463679/206056800-2d072f93-5737-46f3-9d53-64d7b6272b02.png) | ![cow_denoised_diff](https://user-images.githubusercontent.com/49463679/206056812-4359da3e-f95c-419a-a979-2670117e7480.png)
+
+The denoised result is virtually no difference from ground truth.
+
+## Conclusion
+
+From implementing this project, I have learned a lot about frequency analysis and denoising, and also about real-time ray tracing using OptiX.\
+This a-priori paper from a decade ago shows the prospect that Monte Carlo rendering can become real time by using denoising techniques.\
+As we see in class, this prophecy have been fulfilled by novel methods to denoise using AI in recent years.\
+It has been a fun journey implementing this old paper, and seeing the improvement in framerate through better hardware and APIs.
