@@ -6,6 +6,8 @@
 
 My project is an implementation of the paper [*Axis-Aligned Filtering for Interactive Sampled Soft Shadows*](http://graphics.berkeley.edu/papers/UdayMehta-AAF-2012-12/) by Mehta Et al. This paper focuses on rendering real-time Monte Carlo ray traced soft shadows by using Axis-Aligned Filtering. More specifically, it is acheived by doing frequency analysis on the Fourier spectrum of the occlusion function. Using this analysis, we can apply adaptive sampling and finally filtering to acheive real time soft shadows that converge to the ground truth. 
 
+My project is written using OptiX and C++. It can achieve ~30fps on the scene you see above, while having no visible difference to the ground truth. 
+
 ## Theory
 
 ![Occlusion_Spectrum_Figure](https://user-images.githubusercontent.com/49463679/206034604-61f6bef5-11cf-4183-a62c-607e2761f5bc.png)
