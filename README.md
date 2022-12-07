@@ -129,7 +129,8 @@ The denoised result is virtually no difference from ground truth.
 
 ## Interactive Video result
 
-
+[![Watch the video](https://img.youtube.com/vi/799SxjDwoa8/maxresdefault.jpg)](https://youtu.be/799SxjDwoa8)
+https://youtu.be/799SxjDwoa8
 
 ## Conclusion
 
