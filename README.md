@@ -4,7 +4,9 @@
 
 ![overview](https://user-images.githubusercontent.com/49463679/206032840-b5613582-a180-40e0-88e6-feea1a05fad3.png)
 
-My project is an implementation of the paper [*Axis-Aligned Filtering for Interactive Sampled Soft Shadows*](http://graphics.berkeley.edu/papers/UdayMehta-AAF-2012-12/) by Mehta Et al. This paper focuses on rendering real-time Monte Carlo ray traced soft shadows by using Axis-Aligned Filtering. More specifically, it is acheived by doing frequency analysis on the Fourier spectrum of the occlusion function. Using this analysis, we can apply adaptive sampling and finally filtering to acheive real time soft shadows that converge to the ground truth. 
+My project is an implementation of the paper [*Axis-Aligned Filtering for Interactive Sampled Soft Shadows*](http://graphics.berkeley.edu/papers/UdayMehta-AAF-2012-12/) by Mehta Et al. This paper focuses on rendering real-time Monte Carlo ray traced soft shadows by using Axis-Aligned Filtering.\
+Soft shadows are a very important effect in rendering, however it is traditionally slow to render. This is because every location on the area light must be considered and sampled.\
+My project however, speed up the rendering of soft shadows by doing frequency analysis on the Fourier spectrum of the occlusion function. Using this analysis, we can apply adaptive sampling and finally filtering to get real time soft shadows that converge to the ground truth. 
 
 My project is written using OptiX and C++. It can achieve ~30fps on the scene you see above, while having no visible difference to the ground truth. 
 
@@ -124,6 +126,10 @@ noisy | denoised
 ![cow_noisy_diff](https://user-images.githubusercontent.com/49463679/206056800-2d072f93-5737-46f3-9d53-64d7b6272b02.png) | ![cow_denoised_diff](https://user-images.githubusercontent.com/49463679/206056812-4359da3e-f95c-419a-a979-2670117e7480.png)
 
 The denoised result is virtually no difference from ground truth.
+
+## Interactive Video result
+
+
 
 ## Conclusion
 
